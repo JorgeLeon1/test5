@@ -190,6 +190,113 @@ $('allocBtn').addEventListener('click', async () => {
     setStatus(e.message || 'Allocation failed', 'err');
   }
 });
+<button id="btnBatch">Batch Allocate</button>
+
+<div id="batchPanel" style="display:none; margin:1rem 0; padding:1rem; border:1px solid #ddd; border-radius:8px; background:#fff;">
+  <h3>Batch Search</h3>
+  <div style="display:grid; grid-template-columns: repeat(3, minmax(200px,1fr)); gap:.5rem;">
+    <label>Customer ID <input id="b_customerId" type="number" /></label>
+    <label>Status
+      <select id="b_status">
+        <option value="">Any</option>
+        <option value="AWAITINGPICK">Awaiting Pick</option>
+        <!-- add more if you map them -->
+      </select>
+    </label>
+    <label>Modified Since <input id="b_modifiedSince" type="datetime-local" /></label>
+    <label>Reference contains <input id="b_referenceLike" type="text" /></label>
+    <label>Page Size <input id="b_pageSize" type="number" value="100" /></label>
+    <label>Max Pages <input id="b_maxPages" type="number" value="3" /></label>
+  </div>
+  <div style="margin-top:.75rem;">
+    <button id="b_search">Search</button>
+    <button id="b_allocate">Allocate Selected</button>
+    <button id="b_push">Push Selected</button>
+  </div>
+
+  <div id="b_results" style="margin-top:1rem;"></div>
+</div>
+
+<script>
+const $ = (q) => document.querySelector(q);
+
+$("#btnBatch").addEventListener("click", () => {
+  const p = $("#batchPanel");
+  p.style.display = p.style.display === "none" ? "block" : "none";
+});
+
+async function call(url, method='GET') {
+  const r = await fetch(url, { method, headers: { 'Content-Type':'application/json' } });
+  return r.json();
+}
+async function callJson(url, body) {
+  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+
+$("#b_search").addEventListener("click", async () => {
+  const q = new URLSearchParams();
+  const cid = $("#b_customerId").value.trim();
+  const st  = $("#b_status").value.trim();
+  const ms  = $("#b_modifiedSince").value.trim();
+  const ref = $("#b_referenceLike").value.trim();
+  const ps  = $("#b_pageSize").value.trim() || "100";
+  const mp  = $("#b_maxPages").value.trim() || "3";
+  if (cid) q.set('customerId', cid);
+  if (st)  q.set('status', st);
+  if (ms)  q.set('modifiedSince', new Date(ms).toISOString());
+  if (ref) q.set('referenceLike', ref);
+  q.set('pageSize', ps);
+  q.set('maxPages', mp);
+
+  const data = await call(`/api/batch/search?${q.toString()}`);
+  const out = $("#b_results");
+  if (!data.ok) {
+    out.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+    return;
+  }
+  out.innerHTML = renderBatchResults(data.orders || []);
+});
+
+function renderBatchResults(orders) {
+  if (!orders.length) return "<p>No orders found.</p>";
+  let html = `<table border="1" cellspacing="0" cellpadding="6"><thead>
+    <tr>
+      <th>Select</th><th>Order ID</th><th>Customer</th><th>Ref</th><th>Lines</th>
+    </tr></thead><tbody>`;
+  for (const o of orders) {
+    html += `<tr>
+      <td><input type="checkbox" class="b_order" value="${o.orderId}"></td>
+      <td>${o.orderId}</td>
+      <td>${o.customerName} (${o.customerId})</td>
+      <td>${o.referenceNum || ""}</td>
+      <td>${o.lineCount}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+  return html;
+}
+
+function selectedOrders() {
+  return Array.from(document.querySelectorAll(".b_order:checked"))
+    .map(cb => parseInt(cb.value, 10))
+    .filter(Boolean);
+}
+
+$("#b_allocate").addEventListener("click", async () => {
+  const orderIds = selectedOrders();
+  if (!orderIds.length) return alert("Select at least one order.");
+  const res = await callJson("/api/batch/allocate", { orderIds });
+  alert("Allocate result:\n" + JSON.stringify(res, null, 2));
+});
+
+$("#b_push").addEventListener("click", async () => {
+  const orderIds = selectedOrders();
+  if (!orderIds.length) return alert("Select at least one order.");
+  const res = await callJson("/api/batch/push", { orderIds });
+  alert("Push result:\n" + JSON.stringify(res, null, 2));
+});
+</script>
 
 $('pushBtn').addEventListener('click', async () => {
   if (!currentOrderId) return alert('Fetch an order first.');

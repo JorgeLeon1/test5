@@ -44,6 +44,7 @@ app.use(session({
 app.use("/api/single-alloc", singleAllocApi);   // <- first
 app.use("/extensiv", extensivRouter);
 app.use("/alloc", allocRouter);
+app.use("/api/batch", batchAllocApi);
 
 /* ------------------ THEN STATIC + PAGE ROUTES ---------------- */
 app.use(express.static('public'));

@@ -22,6 +22,7 @@ import allocRouter from "./app/routes/alloc.js";
 import extensivRouter from "./app/routes/extensiv.js";
 import ordersRouter from "./app/routes/orders.js";
 import singleAllocApi from "./app/routes/singleAllocApi.js";
+import batchAllocApi from "./app/routes/batchAllocApi.js";
 
 /* --------------------------- App bootstrap --------------------------- */
 

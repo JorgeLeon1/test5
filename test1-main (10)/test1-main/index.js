@@ -22,6 +22,11 @@ import allocRouter from "./app/routes/alloc.js";
 import extensivRouter from "./app/routes/extensiv.js";
 import ordersRouter from "./app/routes/orders.js";
 import singleAllocApi from "./app/routes/singleAllocApi.js";
+import batchAllocApi from "./app/routes/batchAllocApi.js";
+
+
+
+
 
 /* --------------------------- App bootstrap --------------------------- */
 
@@ -38,11 +43,11 @@ app.use(session({
   saveUninitialized: true,
   cookie: { secure: false, maxAge: 30 * 60 * 10000 },
 }));
-
 /* ------------------ MOUNT API ROUTERS FIRST ------------------ */
 app.use("/api/single-alloc", singleAllocApi);   // <- first
 app.use("/extensiv", extensivRouter);
 app.use("/alloc", allocRouter);
+app.use("/api/batch", batchAllocApi);
 
 /* ------------------ THEN STATIC + PAGE ROUTES ---------------- */
 app.use(express.static('public'));

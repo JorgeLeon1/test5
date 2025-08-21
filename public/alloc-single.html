@@ -1,321 +1,423 @@
-<!-- public/alloc-single.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Single Order Allocation</title>
-<style>
-  body{font:14px system-ui,Segoe UI,Arial,sans-serif;background:#f8fafc;margin:24px}
-  h1{color:#0f766e;margin:.2rem 0 1rem}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:.5rem 0 1rem}
-  input[type="number"]{padding:.45rem .6rem;border:1px solid #cbd5e1;border-radius:6px;width:220px}
-  button{background:#10b981;color:#fff;border:none;border-radius:6px;padding:.55rem .9rem;cursor:pointer}
-  button.secondary{background:#3b82f6}
-  button.warn{background:#6b7280}
-  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.05);margin:1rem 0}
-  th,td{padding:.5rem .75rem;border-bottom:1px solid #e5e7eb;text-align:left}
-  thead{background:#e5e7eb}
-  .muted{color:#6b7280}
-  .ok{color:#065f46}
-  .err{color:#991b1b}
-  .stack{display:grid;gap:12px}
-</style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Allocation – Single & Batch</title>
+  <style>
+    :root { --green:#10b981; --blue:#3b82f6; --gray:#6b7280; --bg:#f9fafb; --card:#fff; --muted:#6b7280; }
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:#111827; }
+    .wrap { max-width:1200px; margin:24px auto; padding:0 16px; }
+    h1 { margin:0 0 16px; font-size:28px; }
+    .tabs { display:flex; gap:8px; margin:8px 0 16px; }
+    .tab { padding:8px 12px; border-radius:8px; background:#e5e7eb; cursor:pointer; user-select:none; }
+    .tab.active { background:#111827; color:#fff; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .card { background:var(--card); border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.05); overflow:hidden; }
+    .card h2 { margin:0; padding:14px 16px; border-bottom:1px solid #eef2f7; font-size:16px; }
+    .card .body { padding:12px 16px; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    button { background:var(--green); color:#fff; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; }
+    button.secondary { background:var(--blue); }
+    button.muted { background:var(--gray); }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    input[type="text"], input[type="datetime-local"], select { width:100%; max-width:280px; padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:8px 10px; border-bottom:1px solid #eef2f7; text-align:left; }
+    thead { background:#f3f4f6; }
+    .status { margin-top:10px; font-size:14px; }
+    .status.ok { color:#065f46; }
+    .status.err { color:#991b1b; }
+    .pill { background:#eef2ff; color:#3730a3; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .muted { color:var(--muted); }
+    .hide { display:none; }
+  </style>
 </head>
 <body>
-  <h1>Single Order Allocation</h1>
+  <div class="wrap">
+    <h1>Allocation</h1>
 
-  <div class="row">
-    <label for="orderId">Order ID</label>
-    <input type="number" id="orderId" min="1" placeholder="e.g. 123456"/>
-    <button class="secondary" id="fetchBtn">Fetch Order</button>
-    <button class="warn" id="pushBtn" disabled>Push Allocations to Extensiv</button>
+    <div class="tabs">
+      <div class="tab active" id="tab-single">Single Order</div>
+      <div class="tab" id="tab-batch">Batch</div>
+    </div>
+
+    <!-- SINGLE ORDER PANEL -->
+    <section id="panel-single">
+      <div class="card">
+        <h2>Find Order</h2>
+        <div class="body">
+          <div class="toolbar">
+            <input id="singleOrderId" type="text" placeholder="Order ID e.g. 208136"/>
+            <button class="secondary" id="btnFetchOrder">Fetch Order</button>
+            <button class="muted" id="btnPushSingle" disabled>Push Allocations to Extensiv</button>
+          </div>
+          <div id="singleHeader" class="muted">Enter an order ID and click <b>Fetch Order</b>.</div>
+          <div id="singleStatus" class="status"></div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:16px;">
+        <div class="card">
+          <h2>Order Lines</h2>
+          <div class="body">
+            <div class="toolbar">
+              <button id="btnAllocSelected" disabled>Run SQL Allocation (selected)</button>
+              <span class="muted"><span id="selectedCount">0</span> selected</span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:36px;"><input type="checkbox" id="chkAllLines" /></th>
+                  <th>OrderItemID</th><th>SKU</th><th>Qty</th><th>Qualifier</th>
+                </tr>
+              </thead>
+              <tbody id="linesTbody">
+                <tr><td colspan="5" class="muted">Fetch an order to see lines.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Current SuggAlloc (this order)</h2>
+          <div class="body">
+            <div id="suggTally" class="muted">Allocate to see suggestions.</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>OrderItemID</th><th>ReceiveItemID</th><th>Qty</th>
+                </tr>
+              </thead>
+              <tbody id="suggBody">
+                <tr><td colspan="3" class="muted">No suggestions yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <h2>Matching Inventory (by SKU)</h2>
+        <div class="body">
+          <div id="invNote" class="muted">Inventory for this order’s SKUs appears after fetch.</div>
+          <table>
+            <thead>
+              <tr>
+                <th>SKU</th><th>ReceiveItemID</th><th>Available</th><th>Received</th><th>Location</th>
+              </tr>
+            </thead>
+            <tbody id="invBody">
+              <tr><td colspan="5" class="muted">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- BATCH PANEL -->
+    <section id="panel-batch" class="hide">
+      <div class="card">
+        <h2>Batch Search</h2>
+        <div class="body">
+          <div class="toolbar">
+            <input id="batchSince" type="datetime-local"/>
+            <select id="batchStatus">
+              <option value="">Any Status</option>
+              <option value="AWAITINGPICK">AWAITINGPICK</option>
+              <option value="OPEN">OPEN</option>
+            </select>
+            <input id="batchMax" type="text" placeholder="Max orders (e.g. 50)" />
+            <button class="secondary" id="btnBatchSearch">Search</button>
+            <button id="btnBatchAlloc" disabled>Run SQL Allocation (batch)</button>
+            <button class="muted" id="btnBatchPush" disabled>Push Batch to Extensiv</button>
+          </div>
+          <div id="batchStatusMsg" class="status"></div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width:36px;"><input type="checkbox" id="chkBatchAll"></th>
+                <th>OrderID</th><th>Customer</th><th>Open Lines</th>
+              </tr>
+            </thead>
+            <tbody id="batchBody">
+              <tr><td colspan="4" class="muted">Search to see orders.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </div>
 
-  <div id="status" class="muted"></div>
+  <script>
+    // ---------- tiny helpers ----------
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-  <div class="stack">
-    <div>
-      <h3>Order Lines</h3>
-      <div class="muted" id="linesHint">Fetch an order to see lines.</div>
-      <table id="linesTbl" style="display:none">
-        <thead>
-          <tr>
-            <th style="width:48px;">Select</th>
-            <th>OrderItemID</th><th>OrderID</th><th>SKU</th><th>Qualifier</th><th>Ordered</th>
-          </tr>
-        </thead>
-        <tbody id="linesBody"></tbody>
-      </table>
-      <button id="allocBtn" disabled>Run SQL Allocation (selected)</button>
-    </div>
+    async function fetchJSON(url, opts={}) {
+      const res = await fetch(url, { headers:{ 'Content-Type':'application/json', 'Accept':'application/json' }, ...opts });
+      const txt = await res.text();
+      let data;
+      try { data = txt ? JSON.parse(txt) : {}; } catch {
+        throw new Error(`Unexpected response: ${txt.slice(0,120)}`);
+      }
+      if (!res.ok || data?.ok === false) {
+        throw Object.assign(new Error(data?.message || `HTTP ${res.status}`), { status: res.status, data });
+      }
+      return data;
+    }
 
-    <div>
-      <h3>Matching Inventory</h3>
-      <div class="muted" id="invHint">Inventory for this order’s SKUs appears here.</div>
-      <table id="invTbl" style="display:none">
-        <thead>
-          <tr>
-            <th>ItemID</th><th>Qualifier</th><th>ReceiveItemID</th><th>AvailableQTY</th><th>ReceivedQty</th><th>Location</th>
-          </tr>
-        </thead>
-        <tbody id="invBody"></tbody>
-      </table>
-    </div>
+    function setStatus(el, msg, kind='') {
+      el.className = 'status ' + (kind || '');
+      el.textContent = msg || '';
+    }
 
-    <div>
-      <h3>Current SuggAlloc (this order)</h3>
-      <div class="muted" id="saHint">Allocate to see suggestions.</div>
-      <table id="saTbl" style="display:none">
-        <thead>
-          <tr>
-            <th>OrderItemID</th><th>ReceiveItemID</th><th>SuggAllocQty</th>
-          </tr>
-        </thead>
-        <tbody id="saBody"></tbody>
-      </table>
-    </div>
-  </div>
-
-<script>
-const $ = (id)=>document.getElementById(id);
-let currentOrderId = null;
-let currentLines = [];
-
-function setStatus(msg, cls='muted'){
-  const el = $('status');
-  el.className = cls;
-  el.textContent = msg || '';
-}
-
-function renderLines(lines){
-  const tb = $('linesBody');
-  if (!lines?.length){
-    $('linesTbl').style.display='none';
-    $('linesHint').style.display='block';
-    $('allocBtn').disabled = true;
-    return;
-  }
-  $('linesHint').style.display='none';
-  $('linesTbl').style.display='';
-  tb.innerHTML = lines.map(l => `
-    <tr>
-      <td><input type="checkbox" class="linePick" value="${l.OrderItemID}"></td>
-      <td>${l.OrderItemID}</td>
-      <td>${l.OrderId}</td>
-      <td>${l.SKU || ''}</td>
-      <td>${l.Qualifier || ''}</td>
-      <td>${l.OrderedQTY}</td>
-    </tr>
-  `).join('');
-  $('allocBtn').disabled = false;
-}
-
-function renderInventory(inv){
-  const tb = $('invBody');
-  if (!inv?.length){
-    $('invTbl').style.display='none';
-    $('invHint').style.display='block';
-    return;
-  }
-  $('invHint').style.display='none';
-  $('invTbl').style.display='';
-  tb.innerHTML = inv.map(i => `
-    <tr>
-      <td>${i.ItemID || ''}</td>
-      <td>${i.Qualifier || ''}</td>
-      <td>${i.ReceiveItemID}</td>
-      <td>${i.AvailableQTY}</td>
-      <td>${i.ReceivedQty}</td>
-      <td>${i.LocationName || ''}</td>
-    </tr>
-  `).join('');
-}
-
-function renderSuggAlloc(rows){
-  const tb = $('saBody');
-  if (!rows?.length){
-    $('saTbl').style.display='none';
-    $('saHint').style.display='block';
-    return;
-  }
-  $('saHint').style.display='none';
-  $('saTbl').style.display='';
-  tb.innerHTML = rows.map(r => `
-    <tr>
-      <td>${r.OrderItemID}</td>
-      <td>${r.ReceiveItemID}</td>
-      <td>${r.SuggAllocQty}</td>
-    </tr>
-  `).join('');
-}
-
-$('fetchBtn').addEventListener('click', async () => {
-  try {
-    const id = Number($('orderId').value);
-    if (!Number.isFinite(id) || id<=0) return alert('Enter a valid Order ID');
-    setStatus('Fetching order…');
-    const res = await fetch(`/api/single-alloc/order/${id}`);
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.message || 'Order fetch failed');
-    currentOrderId = data.order.orderId;
-    currentLines   = data.lines || [];
-    renderLines(currentLines);
-    renderInventory(data.inventory || []);
-    renderSuggAlloc([]); // clear
-    setStatus(`Order #${currentOrderId} ready. Upserted ${data.upserts} line(s).`, 'ok');
-    $('pushBtn').disabled = false;
-  } catch (e) {
-    console.error(e);
-    setStatus(e.message || 'Failed to fetch order', 'err');
-  }
-});
-
-$('allocBtn').addEventListener('click', async () => {
-  try {
-    const selected = [...document.querySelectorAll('.linePick:checked')].map(cb => Number(cb.value));
-    if (!selected.length) return alert('Pick at least one line');
-    setStatus('Allocating…');
-    const res = await fetch('/api/single-alloc/allocate', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ lineIds: selected })
+    // ---------- tabs ----------
+    const tabSingle = $('#tab-single'), tabBatch = $('#tab-batch');
+    const panelSingle = $('#panel-single'), panelBatch = $('#panel-batch');
+    tabSingle.addEventListener('click', () => {
+      tabSingle.classList.add('active'); tabBatch.classList.remove('active');
+      panelSingle.classList.remove('hide'); panelBatch.classList.add('hide');
     });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.message || 'Allocation failed');
-    renderSuggAlloc(data.rows || []);
-    setStatus(`Allocated ${data.rows?.length || 0} suggestions.`, 'ok');
-  } catch (e) {
-    console.error(e);
-    setStatus(e.message || 'Allocation failed', 'err');
-  }
-});
-<button id="btnBatch">Batch Allocate</button>
-
-<div id="batchPanel" style="display:none; margin:1rem 0; padding:1rem; border:1px solid #ddd; border-radius:8px; background:#fff;">
-  <h3>Batch Search</h3>
-  <div style="display:grid; grid-template-columns: repeat(3, minmax(200px,1fr)); gap:.5rem;">
-    <label>Customer ID <input id="b_customerId" type="number" /></label>
-    <label>Status
-      <select id="b_status">
-        <option value="">Any</option>
-        <option value="AWAITINGPICK">Awaiting Pick</option>
-        <!-- add more if you map them -->
-      </select>
-    </label>
-    <label>Modified Since <input id="b_modifiedSince" type="datetime-local" /></label>
-    <label>Reference contains <input id="b_referenceLike" type="text" /></label>
-    <label>Page Size <input id="b_pageSize" type="number" value="100" /></label>
-    <label>Max Pages <input id="b_maxPages" type="number" value="3" /></label>
-  </div>
-  <div style="margin-top:.75rem;">
-    <button id="b_search">Search</button>
-    <button id="b_allocate">Allocate Selected</button>
-    <button id="b_push">Push Selected</button>
-  </div>
-
-  <div id="b_results" style="margin-top:1rem;"></div>
-</div>
-
-<script>
-const $ = (q) => document.querySelector(q);
-
-$("#btnBatch").addEventListener("click", () => {
-  const p = $("#batchPanel");
-  p.style.display = p.style.display === "none" ? "block" : "none";
-});
-
-async function call(url, method='GET') {
-  const r = await fetch(url, { method, headers: { 'Content-Type':'application/json' } });
-  return r.json();
-}
-async function callJson(url, body) {
-  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  return r.json();
-}
-
-$("#b_search").addEventListener("click", async () => {
-  const q = new URLSearchParams();
-  const cid = $("#b_customerId").value.trim();
-  const st  = $("#b_status").value.trim();
-  const ms  = $("#b_modifiedSince").value.trim();
-  const ref = $("#b_referenceLike").value.trim();
-  const ps  = $("#b_pageSize").value.trim() || "100";
-  const mp  = $("#b_maxPages").value.trim() || "3";
-  if (cid) q.set('customerId', cid);
-  if (st)  q.set('status', st);
-  if (ms)  q.set('modifiedSince', new Date(ms).toISOString());
-  if (ref) q.set('referenceLike', ref);
-  q.set('pageSize', ps);
-  q.set('maxPages', mp);
-
-  const data = await call(`/api/batch/search?${q.toString()}`);
-  const out = $("#b_results");
-  if (!data.ok) {
-    out.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-    return;
-  }
-  out.innerHTML = renderBatchResults(data.orders || []);
-});
-
-function renderBatchResults(orders) {
-  if (!orders.length) return "<p>No orders found.</p>";
-  let html = `<table border="1" cellspacing="0" cellpadding="6"><thead>
-    <tr>
-      <th>Select</th><th>Order ID</th><th>Customer</th><th>Ref</th><th>Lines</th>
-    </tr></thead><tbody>`;
-  for (const o of orders) {
-    html += `<tr>
-      <td><input type="checkbox" class="b_order" value="${o.orderId}"></td>
-      <td>${o.orderId}</td>
-      <td>${o.customerName} (${o.customerId})</td>
-      <td>${o.referenceNum || ""}</td>
-      <td>${o.lineCount}</td>
-    </tr>`;
-  }
-  html += `</tbody></table>`;
-  return html;
-}
-
-function selectedOrders() {
-  return Array.from(document.querySelectorAll(".b_order:checked"))
-    .map(cb => parseInt(cb.value, 10))
-    .filter(Boolean);
-}
-
-$("#b_allocate").addEventListener("click", async () => {
-  const orderIds = selectedOrders();
-  if (!orderIds.length) return alert("Select at least one order.");
-  const res = await callJson("/api/batch/allocate", { orderIds });
-  alert("Allocate result:\n" + JSON.stringify(res, null, 2));
-});
-
-$("#b_push").addEventListener("click", async () => {
-  const orderIds = selectedOrders();
-  if (!orderIds.length) return alert("Select at least one order.");
-  const res = await callJson("/api/batch/push", { orderIds });
-  alert("Push result:\n" + JSON.stringify(res, null, 2));
-});
-</script>
-
-$('pushBtn').addEventListener('click', async () => {
-  if (!currentOrderId) return alert('Fetch an order first.');
-  if (!confirm(`Push SuggAlloc for Order #${currentOrderId} to Extensiv?`)) return;
-  try {
-    setStatus('Pushing to Extensiv…');
-    const res = await fetch('/api/single-alloc/push', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ orderId: currentOrderId })
+    tabBatch.addEventListener('click', () => {
+      tabBatch.classList.add('active'); tabSingle.classList.remove('active');
+      panelBatch.classList.remove('hide'); panelSingle.classList.add('hide');
     });
-    const data = await res.json();
-    if (!data.ok) throw new Error(`Extensiv responded ${data.status}`);
-    setStatus(`Push OK (status ${data.status}).`, 'ok');
-  } catch (e) {
-    console.error(e);
-    setStatus(e.message || 'Push failed', 'err');
-  }
-});
-</script>
+
+    // ---------- SINGLE ----------
+    let currentOrderId = null;
+    let currentLineIds = [];
+
+    const singleStatus = $('#singleStatus');
+    const linesTbody = $('#linesTbody');
+    const suggBody = $('#suggBody');
+    const suggTally = $('#suggTally');
+    const invBody = $('#invBody');
+    const invNote = $('#invNote');
+    const chkAllLines = $('#chkAllLines');
+    const btnAllocSelected = $('#btnAllocSelected');
+    const selectedCount = $('#selectedCount');
+    const btnPushSingle = $('#btnPushSingle');
+
+    async function renderOrder(orderId) {
+      setStatus(singleStatus, 'Loading order…');
+      const data = await fetchJSON(`/api/single-alloc/order/${orderId}`);
+      currentOrderId = data.order?.orderId;
+      $('#singleHeader').innerHTML = `Order <b>#${data.order?.orderId}</b> — ${data.order?.customerName || ''} <span class="pill">${data.order?.referenceNum || ''}</span>`;
+      setStatus(singleStatus, 'Order loaded.', 'ok');
+
+      // render lines
+      linesTbody.innerHTML = '';
+      currentLineIds = [];
+      (data.lines || []).forEach(l => {
+        currentLineIds.push(l.OrderItemID);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="checkbox" class="ln" data-id="${l.OrderItemID}"/></td>
+          <td>${l.OrderItemID}</td>
+          <td>${l.SKU || ''}</td>
+          <td>${l.OrderedQTY}</td>
+          <td>${l.Qualifier || ''}</td>
+        `;
+        linesTbody.appendChild(tr);
+      });
+      updateSelectionUI();
+
+      // load inventory & current suggestions (optional endpoints, ignore if 404)
+      try {
+        const inv = await fetchJSON(`/api/inventory/by-skus`, { method:'POST', body: JSON.stringify({ skus:[...(new Set((data.lines||[]).map(x=>x.SKU).filter(Boolean)))] }) });
+        invBody.innerHTML = '';
+        (inv.items || []).forEach(x => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${x.sku}</td><td>${x.receiveItemId||''}</td><td>${x.available||0}</td><td>${x.received||0}</td><td>${x.location||''}</td>`;
+          invBody.appendChild(tr);
+        });
+        invNote.textContent = '';
+      } catch { invBody.innerHTML = '<tr><td colspan="5" class="muted">No inventory endpoint or no data.</td></tr>'; }
+
+      try {
+        const sugg = await fetchJSON(`/api/single-alloc/sugg/${currentOrderId}`);
+        suggBody.innerHTML = '';
+        if (!sugg.allocations?.length) {
+          suggBody.innerHTML = '<tr><td colspan="3" class="muted">No suggestions yet.</td></tr>';
+        } else {
+          sugg.allocations.forEach(a => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${a.OrderItemID}</td><td>${a.ReceiveItemID}</td><td>${a.SuggAllocQty}</td>`;
+            suggBody.appendChild(tr);
+          });
+        }
+        suggTally.textContent = '';
+      } catch {
+        suggBody.innerHTML = '<tr><td colspan="3" class="muted">No suggestion endpoint or no data.</td></tr>';
+      }
+
+      btnPushSingle.disabled = false;
+    }
+
+    function getSelectedLineIds() {
+      return $$('.ln:checked').map(cb => parseInt(cb.dataset.id,10)).filter(Boolean);
+    }
+    function updateSelectionUI() {
+      selectedCount.textContent = getSelectedLineIds().length;
+      btnAllocSelected.disabled = !currentOrderId || getSelectedLineIds().length === 0;
+      chkAllLines.checked = getSelectedLineIds().length && getSelectedLineIds().length === currentLineIds.length;
+    }
+
+    // events
+    $('#btnFetchOrder').addEventListener('click', async () => {
+      try {
+        const id = ($('#singleOrderId').value || '').trim();
+        if (!/^\d+$/.test(id)) return setStatus(singleStatus, 'Enter a numeric Order ID.', 'err');
+        await renderOrder(id);
+      } catch (e) {
+        console.error(e);
+        setStatus(singleStatus, e.message || 'Load failed', 'err');
+      }
+    });
+
+    chkAllLines.addEventListener('change', () => {
+      $$('.ln').forEach(cb => cb.checked = chkAllLines.checked);
+      updateSelectionUI();
+    });
+    linesTbody.addEventListener('change', (e) => {
+      if (e.target.classList.contains('ln')) updateSelectionUI();
+    });
+
+    btnAllocSelected.addEventListener('click', async () => {
+      if (!currentOrderId) return;
+      const ids = getSelectedLineIds();
+      if (!ids.length) return;
+      try {
+        setStatus(singleStatus, 'Allocating in SQL…');
+        const data = await fetchJSON('/api/single-alloc/allocate', {
+          method:'POST',
+          body: JSON.stringify({ orderId: currentOrderId, lineIds: ids })
+        });
+        setStatus(singleStatus, 'Allocation complete.', 'ok');
+
+        // refresh current SuggAlloc
+        const sugg = await fetchJSON(`/api/single-alloc/sugg/${currentOrderId}`);
+        suggBody.innerHTML = '';
+        if (!sugg.allocations?.length) {
+          suggBody.innerHTML = '<tr><td colspan="3" class="muted">No suggestions yet.</td></tr>';
+        } else {
+          sugg.allocations.forEach(a => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${a.OrderItemID}</td><td>${a.ReceiveItemID}</td><td>${a.SuggAllocQty}</td>`;
+            suggBody.appendChild(tr);
+          });
+        }
+      } catch (e) {
+        console.error(e);
+        setStatus(singleStatus, e.message || 'Allocation failed', 'err');
+      }
+    });
+
+    $('#btnPushSingle').addEventListener('click', async () => {
+      if (!currentOrderId) return alert('Fetch an order first.');
+      if (!confirm(`Push SuggAlloc for Order #${currentOrderId} to Extensiv?`)) return;
+      try {
+        setStatus(singleStatus, 'Pushing to Extensiv…');
+        const data = await fetchJSON('/api/single-alloc/push', {
+          method:'POST',
+          body: JSON.stringify({ orderId: currentOrderId })
+        });
+        setStatus(singleStatus, `Push OK (status ${data.status})`, 'ok');
+      } catch (e) {
+        console.error(e);
+        setStatus(singleStatus, e.data?.message || e.message || 'Push failed', 'err');
+      }
+    });
+
+    // ---------- BATCH ----------
+    const batchBody = $('#batchBody');
+    const batchStatusMsg = $('#batchStatusMsg');
+    const chkBatchAll = $('#chkBatchAll');
+    const btnBatchSearch = $('#btnBatchSearch');
+    const btnBatchAlloc = $('#btnBatchAlloc');
+    const btnBatchPush = $('#btnBatchPush');
+
+    function getSelectedOrders() {
+      return $$('#batchBody input[type=checkbox]:checked').map(cb => parseInt(cb.dataset.id,10)).filter(Boolean);
+    }
+    function updateBatchButtons() {
+      const any = getSelectedOrders().length > 0;
+      btnBatchAlloc.disabled = !any;
+      btnBatchPush.disabled = !any;
+    }
+
+    btnBatchSearch.addEventListener('click', async () => {
+      try {
+        setStatus(batchStatusMsg, 'Searching…');
+        const payload = {
+          modifiedSince: $('#batchSince').value || null,
+          status: $('#batchStatus').value || null,
+          maxOrders: parseInt($('#batchMax').value || '0', 10) || null
+        };
+        const data = await fetchJSON('/api/batch-alloc/search', { method:'POST', body: JSON.stringify(payload) });
+
+        batchBody.innerHTML = '';
+        if (!data.orders?.length) {
+          batchBody.innerHTML = '<tr><td colspan="4" class="muted">No orders found.</td></tr>';
+        } else {
+          data.orders.forEach(o => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><input type="checkbox" class="bo" data-id="${o.orderId}"/></td>
+              <td>${o.orderId}</td>
+              <td>${o.customerName || ''}</td>
+              <td><span class="pill">${o.openLines ?? ''}</span></td>
+            `;
+            batchBody.appendChild(tr);
+          });
+        }
+        chkBatchAll.checked = false;
+        setStatus(batchStatusMsg, 'Done.', 'ok');
+        updateBatchButtons();
+      } catch (e) {
+        console.error(e);
+        setStatus(batchStatusMsg, e.message || 'Search failed', 'err');
+      }
+    });
+
+    chkBatchAll.addEventListener('change', () => {
+      $$('#batchBody .bo').forEach(cb => cb.checked = chkBatchAll.checked);
+      updateBatchButtons();
+    });
+    batchBody.addEventListener('change', (e) => {
+      if (e.target.classList.contains('bo')) updateBatchButtons();
+    });
+
+    btnBatchAlloc.addEventListener('click', async () => {
+      const orderIds = getSelectedOrders();
+      if (!orderIds.length) return;
+      if (!confirm(`Run SQL allocation for ${orderIds.length} orders?`)) return;
+      try {
+        setStatus(batchStatusMsg, 'Allocating (batch)…');
+        const data = await fetchJSON('/api/batch-alloc/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
+        setStatus(batchStatusMsg, `Allocated ${data.linesAffected ?? 'some'} lines.`, 'ok');
+      } catch (e) {
+        console.error(e);
+        setStatus(batchStatusMsg, e.message || 'Batch allocation failed', 'err');
+      }
+    });
+
+    btnBatchPush.addEventListener('click', async () => {
+      const orderIds = getSelectedOrders();
+      if (!orderIds.length) return;
+      if (!confirm(`Push allocations for ${orderIds.length} orders to Extensiv?`)) return;
+      try {
+        setStatus(batchStatusMsg, 'Pushing (batch)…');
+        const data = await fetchJSON('/api/batch-alloc/push', { method:'POST', body: JSON.stringify({ orderIds }) });
+        setStatus(batchStatusMsg, `Batch push OK. Sent ${data.sent ?? 0}.`, 'ok');
+      } catch (e) {
+        console.error(e);
+        setStatus(batchStatusMsg, e.data?.message || e.message || 'Batch push failed', 'err');
+      }
+    });
+
+  </script>
 </body>
 </html>

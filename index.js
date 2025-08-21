@@ -123,8 +123,8 @@ app.get("/logout", (req, res) => {
 app.get("/landing", isAuthenticated, (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "landing.html"))
 );
-app.get("/allocateOrders", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "allocateOrders.html"))
+app.get('/alloc-single', isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'alloc-single.html'))
 );
 app.get("/order", isAuthenticated, (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "order.html"))

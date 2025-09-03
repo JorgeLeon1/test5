@@ -16,12 +16,15 @@
     .card { background:var(--card); border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.05); overflow:hidden; }
     .card h2 { margin:0; padding:14px 16px; border-bottom:1px solid #eef2f7; font-size:16px; }
     .card .body { padding:12px 16px; }
-    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; align-items:flex-start; }
     button { background:var(--green); color:#fff; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; }
     button.secondary { background:var(--blue); }
     button.muted { background:var(--gray); }
     button:disabled { opacity:.6; cursor:not-allowed; }
-    input[type="text"], select { width:100%; max-width:280px; padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; }
+    input[type="text"], textarea, select {
+      width:100%; max-width:300px; padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; font:inherit;
+    }
+    textarea { min-height:72px; resize:vertical; }
     table { width:100%; border-collapse:collapse; }
     th, td { padding:8px 10px; border-bottom:1px solid #eef2f7; text-align:left; }
     thead { background:#f3f4f6; }
@@ -118,20 +121,26 @@
     <!-- BATCH PANEL -->
     <section id="panel-batch" class="hide">
       <div class="card">
-        <h2>Batch Search</h2>
+        <h2>Batch Load</h2>
         <div class="body">
           <div class="toolbar">
-            <!-- removed datetime filter to avoid time-based searches by default -->
-            <select id="batchStatus">
-              <option value="">Any Status</option>
-              <option value="AWAITINGPICK">AWAITINGPICK</option>
-              <option value="OPEN">OPEN</option>
-            </select>
-            <input id="batchMax" type="text" placeholder="Max orders (e.g. 50)" />
-            <button class="secondary" id="btnBatchSearch">Search</button>
-            <button id="btnBatchAlloc" disabled>Run SQL Allocation (batch)</button>
-            <button class="muted" id="btnBatchPush" disabled>Push Batch to Extensiv</button>
+            <div style="display:flex; flex-direction:column; gap:6px; max-width:320px;">
+              <label class="muted" for="batchId">Batch ID</label>
+              <input id="batchId" type="text" placeholder="e.g. 9673" />
+              <button class="secondary" id="btnLoadBatch">Load by Batch ID</button>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:6px; max-width:520px;">
+              <label class="muted" for="batchIds">Specific Order IDs (comma, space, or new lines)</label>
+              <textarea id="batchIds" placeholder="e.g. 208136, 208140 208141&#10;208150"></textarea>
+              <div style="display:flex; gap:8px;">
+                <button id="btnLoadIds">Load by Order IDs</button>
+                <button id="btnBatchAlloc" disabled>Run SQL Allocation (batch)</button>
+                <button class="muted" id="btnBatchPush" disabled>Push Batch to Extensiv</button>
+              </div>
+            </div>
           </div>
+
           <div id="batchStatusMsg" class="status"></div>
 
           <table>
@@ -142,7 +151,7 @@
               </tr>
             </thead>
             <tbody id="batchBody">
-              <tr><td colspan="4" class="muted">Search to see orders.</td></tr>
+              <tr><td colspan="4" class="muted">Load a Batch ID or enter Order IDs to see orders.</td></tr>
             </tbody>
           </table>
         </div>
@@ -160,7 +169,7 @@
       const txt = await res.text();
       let data;
       try { data = txt ? JSON.parse(txt) : {}; } catch {
-        throw new Error(`Unexpected response: ${txt.slice(0,120)}`);
+        throw new Error(`Unexpected response: ${txt.slice(0,200)}`);
       }
       if (!res.ok || data?.ok === false) {
         throw Object.assign(new Error(data?.message || `HTTP ${res.status}`), { status: res.status, data });
@@ -224,7 +233,7 @@
       });
       updateSelectionUI();
 
-      // load inventory & current suggestions (optional endpoints, ignore if 404)
+      // load inventory (optional endpoint)
       try {
         const skus = [...new Set((data.lines||[]).map(x=>x.SKU).filter(Boolean))];
         const inv = await fetchJSON(`/api/inventory/by-skus`, { method:'POST', body: JSON.stringify({ skus }) });
@@ -237,6 +246,7 @@
         invNote.textContent = '';
       } catch { invBody.innerHTML = '<tr><td colspan="5" class="muted">No inventory endpoint or no data.</td></tr>'; }
 
+      // current suggestions (optional endpoint)
       try {
         const sugg = await fetchJSON(`/api/single-alloc/sugg/${currentOrderId}`);
         suggBody.innerHTML = '';
@@ -266,7 +276,7 @@
       chkAllLines.checked = getSelectedLineIds().length && getSelectedLineIds().length === currentLineIds.length;
     }
 
-    // events
+    // Single events
     $('#btnFetchOrder').addEventListener('click', async () => {
       try {
         const id = ($('#singleOrderId').value || '').trim();
@@ -297,8 +307,6 @@
           body: JSON.stringify({ orderId: currentOrderId, lineIds: ids })
         });
         setStatus(singleStatus, 'Allocation complete.', 'ok');
-
-        // refresh current SuggAlloc
         const sugg = await fetchJSON(`/api/single-alloc/sugg/${currentOrderId}`);
         suggBody.innerHTML = '';
         if (!sugg.allocations?.length) {
@@ -336,9 +344,10 @@
     const batchBody = $('#batchBody');
     const batchStatusMsg = $('#batchStatusMsg');
     const chkBatchAll = $('#chkBatchAll');
-    const btnBatchSearch = $('#btnBatchSearch');
     const btnBatchAlloc = $('#btnBatchAlloc');
     const btnBatchPush = $('#btnBatchPush');
+    const btnLoadBatch = $('#btnLoadBatch');
+    const btnLoadIds = $('#btnLoadIds');
 
     function getSelectedOrders() {
       return $$('#batchBody input[type=checkbox]:checked').map(cb => parseInt(cb.dataset.id,10)).filter(Boolean);
@@ -348,46 +357,63 @@
       btnBatchAlloc.disabled = !any;
       btnBatchPush.disabled = !any;
     }
+    function renderBatchTable(orders) {
+      batchBody.innerHTML = '';
+      if (!orders?.length) {
+        batchBody.innerHTML = '<tr><td colspan="4" class="muted">No orders found.</td></tr>';
+        return;
+      }
+      orders.forEach(o => {
+        const openLines = (o.lineCount ?? o.openLines ?? '');
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="checkbox" class="bo" data-id="${o.orderId}"/></td>
+          <td>${o.orderId}</td>
+          <td>${o.customerName || ''}</td>
+          <td><span class="pill">${openLines}</span></td>
+        `;
+        batchBody.appendChild(tr);
+      });
+      chkBatchAll.checked = false;
+      updateBatchButtons();
+    }
 
-    btnBatchSearch.addEventListener('click', async () => {
+    btnLoadBatch.addEventListener('click', async () => {
       try {
-        setStatus(batchStatusMsg, 'Searching…');
-
-        const status = $('#batchStatus').value || '';
-        const maxOrders = parseInt($('#batchMax').value || '0', 10) || 0;
-
-        // Build query params — NO time filter by default
-        const qs = new URLSearchParams();
-        if (status) qs.set('status', status);
-        if (maxOrders) {
-          qs.set('pageSize', Math.min(maxOrders, 500));
-          qs.set('maxPages', 1);
+        setStatus(batchStatusMsg, 'Loading batch…');
+        const val = ($('#batchId').value || '').trim();
+        if (!/^\d+$/.test(val)) {
+          setStatus(batchStatusMsg, 'Enter a numeric Batch ID.', 'err'); return;
         }
-
-        const data = await fetchJSON(`/api/batch/search?${qs.toString()}`, { method: 'GET' });
-
-        batchBody.innerHTML = '';
-        if (!data.orders?.length) {
-          batchBody.innerHTML = '<tr><td colspan="4" class="muted">No orders found.</td></tr>';
-        } else {
-          data.orders.forEach(o => {
-            const openLines = (o.lineCount ?? o.openLines ?? '');
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-              <td><input type="checkbox" class="bo" data-id="${o.orderId}"/></td>
-              <td>${o.orderId}</td>
-              <td>${o.customerName || ''}</td>
-              <td><span class="pill">${openLines}</span></td>
-            `;
-            batchBody.appendChild(tr);
-          });
-        }
-        chkBatchAll.checked = false;
-        setStatus(batchStatusMsg, 'Done.', 'ok');
-        updateBatchButtons();
+        const data = await fetchJSON('/api/batch/search-by-batchid', {
+          method:'POST', body: JSON.stringify({ batchId: parseInt(val,10), pageSize: 500, maxPages: 10 })
+        });
+        renderBatchTable(data.orders);
+        setStatus(batchStatusMsg, `Loaded ${data.orders?.length || 0} order(s) from batch ${val}.`, 'ok');
       } catch (e) {
         console.error(e);
-        setStatus(batchStatusMsg, e.message || 'Search failed', 'err');
+        setStatus(batchStatusMsg, e.message || 'Batch load failed', 'err');
+      }
+    });
+
+    btnLoadIds.addEventListener('click', async () => {
+      try {
+        setStatus(batchStatusMsg, 'Loading orders…');
+        const raw = ($('#batchIds').value || '');
+        const ids = Array.from(new Set(
+          raw.split(/[\s,]+/).map(v => v.trim()).filter(v => /^\d+$/.test(v))
+        )).map(v => parseInt(v, 10));
+        if (!ids.length) {
+          setStatus(batchStatusMsg, 'Enter at least one numeric Order ID.', 'err'); return;
+        }
+        const data = await fetchJSON('/api/batch/search-by-ids', {
+          method:'POST', body: JSON.stringify({ orderIds: ids })
+        });
+        renderBatchTable(data.orders);
+        setStatus(batchStatusMsg, `Loaded ${data.orders?.length || 0} order(s).`, 'ok');
+      } catch (e) {
+        console.error(e);
+        setStatus(batchStatusMsg, e.message || 'Load failed', 'err');
       }
     });
 
@@ -405,7 +431,7 @@
       if (!confirm(`Run SQL allocation for ${orderIds.length} orders?`)) return;
       try {
         setStatus(batchStatusMsg, 'Allocating (batch)…');
-        const data = await fetchJSON('/api/batch/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
+        await fetchJSON('/api/batch/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
         setStatus(batchStatusMsg, `Allocation request sent for ${orderIds.length} orders.`, 'ok');
       } catch (e) {
         console.error(e);
@@ -419,14 +445,13 @@
       if (!confirm(`Push allocations for ${orderIds.length} orders to Extensiv?`)) return;
       try {
         setStatus(batchStatusMsg, 'Pushing (batch)…');
-        const data = await fetchJSON('/api/batch/push', { method:'POST', body: JSON.stringify({ orderIds }) });
+        await fetchJSON('/api/batch/push', { method:'POST', body: JSON.stringify({ orderIds }) });
         setStatus(batchStatusMsg, `Batch push sent for ${orderIds.length} orders.`, 'ok');
       } catch (e) {
         console.error(e);
         setStatus(batchStatusMsg, e.data?.message || e.message || 'Batch push failed', 'err');
       }
     });
-
   </script>
 </body>
 </html>

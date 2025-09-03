@@ -369,6 +369,119 @@ END;
 body: { orderIds: number[] }
 Pushes SuggAlloc per order to Extensiv /orders/{id}/allocator
 ------------------------------------------------------------------- */
+
+// POST /api/batch/search-by-batchid
+// body: { batchId: number, pageSize?: number, maxPages?: number }
+r.post("/search-by-batchid", async (req, res) => {
+  try {
+    const base = trimBase(
+      process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com"
+    );
+    const headers = await authHeaders();
+
+    const batchId = toInt(req.body?.batchId, 0);
+    if (!batchId) return res.status(400).json({ ok:false, message:"batchId (number) required" });
+
+    const pageSize = Math.min(toInt(req.body?.pageSize, 250), 500);
+    const maxPages = Math.min(toInt(req.body?.maxPages, 10), 20);
+
+    // Try several candidate RQL fields until one returns data.
+    const rqlCandidates = [
+      [`batchId==${batchId}`],
+      [`readOnly.batchId==${batchId}`],
+      [`batchIdentifier.id==${batchId}`],
+      [`batchIdentifier.batchId==${batchId}`],
+    ];
+
+    const pool = await getPool();
+    const cols = await getExistingCols(pool);
+
+    let usedRql = null;
+    let importedHeaders = 0;
+    let upsertedLines = 0;
+    const foundOrders = [];
+
+    for (const parts of rqlCandidates) {
+      const rql = parts.join(";");
+      let gotAny = false;
+
+      for (let pg = 1; pg <= maxPages; pg++) {
+        const { data, status } = await axios.get(`${base}/orders`, {
+          headers,
+          params: { pgsiz: pageSize, pgnum: pg, detail: "OrderItems", itemdetail: "All", rql },
+          timeout: 30000,
+          validateStatus: () => true,
+        });
+        if (!(status >= 200 && status < 300)) break; // try next candidate
+
+        const orders = firstArray(data);
+        if (!orders.length) break;
+
+        if (!usedRql) usedRql = rql;
+        gotAny = true;
+        importedHeaders += orders.length;
+
+        for (const ord of orders) {
+          const R = ro(ord);
+          const orderId = toInt(R.orderId ?? ord.orderId ?? R.OrderId ?? ord.OrderId, 0);
+          const customerId = toInt(ord?.customerIdentifier?.id, 0);
+          const customerName = s(ord?.customerIdentifier?.name, 200);
+          const referenceNum = s(ord?.referenceNum, 120);
+
+          const lines = itemsFromOrder(ord);
+          const lineObjs = [];
+
+          for (const it of lines) {
+            const IR = ro(it);
+            const orderItemId = toInt(IR.orderItemId ?? it.orderItemId ?? IR.OrderItemId ?? it.OrderItemId, 0);
+            if (!orderItemId) continue;
+
+            const itemId   = toInt(it?.itemIdentifier?.id ?? it?.ItemID ?? 0, 0);
+            const sku      = s(it?.itemIdentifier?.sku ?? it?.sku ?? it?.SKU ?? "", 150);
+            const unitId   = toInt(IR?.unitIdentifier?.id, 0);
+            const unitName = s(IR?.unitIdentifier?.name ?? "", 80);
+            const qualifier= s(it?.qualifier ?? "", 80);
+            const qty      = toInt(it?.qty ?? it?.orderedQty ?? it?.Qty ?? it?.OrderedQty ?? 0, 0);
+
+            await upsertOrderDetail(pool, cols, {
+              OrderItemID: orderItemId,
+              OrderID: orderId,
+              CustomerID: customerId,
+              CustomerName: customerName,
+              SKU: sku,
+              ItemID: itemId,            // numeric for Inventory join
+              Qualifier: qualifier,
+              OrderedQTY: qty,
+              UnitID: unitId,
+              UnitName: unitName,
+              ReferenceNum: referenceNum,
+            });
+            upsertedLines++;
+
+            lineObjs.push({ orderItemId, itemId, sku, qty, unitId, unitName, qualifier });
+          }
+
+          foundOrders.push({
+            orderId, customerId, customerName, referenceNum,
+            lineCount: lineObjs.length,
+            lines: lineObjs,
+          });
+        }
+
+        if (orders.length < pageSize) break; // last page for this candidate
+      }
+
+      if (gotAny) break; // stop after first candidate that worked
+    }
+
+    return res.json({ ok:true, usedRql, importedHeaders, upsertedLines, orders: foundOrders });
+  } catch (e) {
+    return res
+      .status(e.status || 500)
+      .json({ ok:false, message: e.message, data: e.response?.data || null });
+  }
+});
+
 r.post("/push", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)

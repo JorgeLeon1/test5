@@ -628,6 +628,62 @@ r.post("/inventory/by-skus", async (req, res) => {
   }
 });
 
+// POST /api/batch/inventory-debug
+// body: { orderIds: number[] }
+// Shows candidate counts per tier for each line so you can see *why* nothing was picked.
+r.post("/batch/inventory-debug", async (req, res) => {
+  try {
+    const orderIds = Array.isArray(req.body?.orderIds)
+      ? req.body.orderIds.map(n => (Number.isFinite(Number(n)) ? Math.trunc(Number(n)) : 0)).filter(Boolean)
+      : [];
+    if (!orderIds.length) return res.status(400).json({ ok:false, message:"orderIds required" });
+
+    const pool = await getPool();
+    const data = await pool.request().query(`
+      ;WITH odx AS (
+        SELECT
+          od.OrderID,
+          od.OrderItemID,
+          od.OrderedQTY,
+          UPPER(LTRIM(RTRIM(od.SKU)))                  AS SKU_N,
+          NULLIF(UPPER(LTRIM(RTRIM(od.Qualifier))),'') AS Qual_N,
+          TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum
+        FROM OrderDetails od
+        WHERE od.OrderID IN (${orderIds.join(",")})
+      ),
+      invx AS (
+        SELECT
+          inv.ReceiveItemID,
+          inv.ItemID,
+          UPPER(LTRIM(RTRIM(inv.SKU)))                  AS SKU_N,
+          NULLIF(UPPER(LTRIM(RTRIM(inv.Qualifier))),'') AS Qual_N,
+          inv.AvailableQTY,
+          (inv.AvailableQTY - ISNULL(sa.AllocOnReceive,0)) AS RemainingAvailable
+        FROM Inventory inv
+        LEFT JOIN (
+          SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
+          FROM SuggAlloc GROUP BY ReceiveItemID
+        ) sa ON sa.ReceiveItemID = inv.ReceiveItemID
+      )
+      SELECT
+        o.OrderID,
+        o.OrderItemID,
+        o.SKU_N,
+        o.Qual_N,
+        o.OrderedQTY,
+        (SELECT COUNT(*) FROM invx i WHERE i.ItemID = o.ItemIDNum AND ((i.Qual_N = o.Qual_N) OR (i.Qual_N IS NULL AND o.Qual_N IS NULL)) AND ISNULL(i.RemainingAvailable,0) > 0) AS T1_ItemIdQual,
+        (SELECT COUNT(*) FROM invx i WHERE i.SKU_N  = o.SKU_N   AND ((i.Qual_N = o.Qual_N) OR (i.Qual_N IS NULL AND o.Qual_N IS NULL)) AND ISNULL(i.RemainingAvailable,0) > 0) AS T2_SkuQual,
+        (SELECT COUNT(*) FROM invx i WHERE i.SKU_N  = o.SKU_N   AND ISNULL(i.RemainingAvailable,0) > 0) AS T3_SkuAnyQual
+      FROM odx o
+      ORDER BY o.OrderID, o.OrderItemID;
+    `);
+
+    res.json({ ok:true, lines: data.recordset });
+  } catch (e) {
+    res.status(500).json({ ok:false, message: e.message });
+  }
+});
+
 /* ----------------------- POST /api/batch/push -----------------------
 body: { orderIds: number[], forceMethod?: "auto"|"put"|"post" }
 Pushes SuggAlloc per order to Extensiv /orders/{id}/allocator, with PUT/POST control.

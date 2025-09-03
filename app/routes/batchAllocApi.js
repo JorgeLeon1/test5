@@ -102,30 +102,21 @@ r.get("/search", async (req, res) => {
 
     // Build RQL (Extensiv RQL syntax)
     const rql = [];
+    rql.push("readOnly.fullyAllocated==false"); // only open/unfinished by default
 
-    // Always look for orders that are not fully allocated
-    rql.push("readOnly.fullyAllocated==false");
-
-    // Optional: map human statuses to numeric codes (adjust to your tenant’s codes)
     if (req.query.status) {
       const statusMap = {
         AWAITINGPICK: 0,
         OPEN: 0,
         CLOSED: 9,
         CANCELLED: 5,
-        // add more mappings as needed
       };
       const code = statusMap[String(req.query.status).toUpperCase()];
       if (Number.isFinite(code)) rql.push(`readOnly.status==${code}`);
     }
 
-    if (req.query.customerId) {
-      rql.push(`customerIdentifier.id==${toInt(req.query.customerId, 0)}`);
-    }
-    if (req.query.referenceLike) {
-      rql.push(`referenceNum==*${req.query.referenceLike}*`);
-    }
-    // Only include time if explicitly provided
+    if (req.query.customerId) rql.push(`customerIdentifier.id==${toInt(req.query.customerId, 0)}`);
+    if (req.query.referenceLike) rql.push(`referenceNum==*${req.query.referenceLike}*`);
     if (req.query.modifiedSince) {
       rql.push(`readOnly.modifiedDateTime>=${encodeURIComponent(req.query.modifiedSince)}`);
     }
@@ -231,6 +222,145 @@ r.get("/search", async (req, res) => {
   }
 });
 
+/* ----------------------- POST /api/batch/search-by-batchid -----------------------
+body: { batchId: number, pageSize?: number, maxPages?: number }
+Tries multiple RQL field paths for Batch ID and returns diagnostics.
+--------------------------------------------------------------------- */
+r.post("/search-by-batchid", async (req, res) => {
+  try {
+    const base = trimBase(
+      process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com"
+    );
+    const headers = await authHeaders();
+
+    const batchId = toInt(req.body?.batchId, 0);
+    if (!batchId) return res.status(400).json({ ok:false, message:"batchId (number) required" });
+
+    const pageSize = Math.min(toInt(req.body?.pageSize, 250), 500);
+    const maxPages = Math.min(toInt(req.body?.maxPages, 10), 20);
+
+    const rqlCandidates = [
+      `batchId==${batchId}`,
+      `readOnly.batchId==${batchId}`,
+      `batchIdentifier.id==${batchId}`,
+      `batchIdentifier.batchId==${batchId}`,
+      `readOnly.batchIdentifier.id==${batchId}`,
+      `readOnly.batchIdentifier.batchId==${batchId}`,
+      `batchNumber==${batchId}`,
+      `readOnly.batchNumber==${batchId}`,
+      `batch.id==${batchId}`,
+      `readOnly.batch.id==${batchId}`,
+      `readOnly.batchIdentifier.number==${batchId}`,
+      `batchIdentifier.number==${batchId}`,
+    ];
+
+    const pool = await getPool();
+    const cols = await getExistingCols(pool);
+
+    const tried = [];
+    let usedRql = null;
+    let importedHeaders = 0;
+    let upsertedLines = 0;
+    const foundOrders = [];
+
+    async function ingestOrders(orders) {
+      for (const ord of orders) {
+        const R = ro(ord);
+        const orderId     = toInt(R.orderId ?? ord.orderId ?? R.OrderId ?? ord.OrderId, 0);
+        const customerId  = toInt(ord?.customerIdentifier?.id, 0);
+        const customerName= s(ord?.customerIdentifier?.name, 200);
+        const referenceNum= s(ord?.referenceNum, 120);
+
+        const lines = itemsFromOrder(ord) || [];
+        const lineObjs = [];
+
+        for (const it of lines) {
+          const IR = ro(it);
+          const orderItemId = toInt(IR.orderItemId ?? it.orderItemId ?? IR.OrderItemId ?? it.OrderItemId, 0);
+          if (!orderItemId) continue;
+
+          const itemId   = toInt(it?.itemIdentifier?.id ?? it?.ItemID ?? 0, 0);
+          const sku      = s(it?.itemIdentifier?.sku ?? it?.sku ?? it?.SKU ?? "", 150);
+          const unitId   = toInt(IR?.unitIdentifier?.id, 0);
+          const unitName = s(IR?.unitIdentifier?.name ?? "", 80);
+          const qualifier= s(it?.qualifier ?? "", 80);
+          const qty      = toInt(it?.qty ?? it?.orderedQty ?? it?.Qty ?? it?.OrderedQty ?? 0, 0);
+
+          await upsertOrderDetail(pool, cols, {
+            OrderItemID: orderItemId,
+            OrderID: orderId,
+            CustomerID: customerId,
+            CustomerName: customerName,
+            SKU: sku,
+            ItemID: itemId,
+            Qualifier: qualifier,
+            OrderedQTY: qty,
+            UnitID: unitId,
+            UnitName: unitName,
+            ReferenceNum: referenceNum,
+          });
+          upsertedLines++;
+
+          lineObjs.push({ orderItemId, itemId, sku, qty, unitId, unitName, qualifier });
+        }
+
+        foundOrders.push({
+          orderId, customerId, customerName, referenceNum,
+          lineCount: lineObjs.length,
+          lines: lineObjs,
+        });
+      }
+    }
+
+    for (const rql of rqlCandidates) {
+      let gotAny = false;
+      let lastStatus = 0;
+
+      for (let pg = 1; pg <= maxPages; pg++) {
+        const { data, status } = await axios.get(`${base}/orders`, {
+          headers,
+          params: { pgsiz: pageSize, pgnum: pg, detail: "OrderItems", itemdetail: "All", rql },
+          timeout: 30000,
+          validateStatus: () => true,
+        });
+        lastStatus = status;
+
+        if (!tried.length || tried[tried.length - 1].rql !== rql) {
+          const sampleKeys = data && typeof data === "object" ? Object.keys(data).slice(0, 10) : [];
+          tried.push({ rql, status: lastStatus, sampleKeys });
+        }
+
+        if (!(status >= 200 && status < 300)) break;
+
+        const orders = firstArray(data);
+        if (!orders.length) break;
+
+        if (!usedRql) usedRql = rql;
+        gotAny = true;
+        importedHeaders += orders.length;
+        await ingestOrders(orders);
+
+        if (orders.length < pageSize) break; // last page for this RQL
+      }
+
+      if (gotAny) break;  // stop after the first working RQL
+    }
+
+    return res.json({
+      ok: true,
+      usedRql,
+      importedHeaders,
+      upsertedLines,
+      orders: foundOrders,
+      diagnostics: { tried }
+    });
+  } catch (e) {
+    return res
+      .status(e.status || 500)
+      .json({ ok:false, message: e.message, data: e.response?.data || null });
+  }
+});
+
 /* ----------------------- POST /api/batch/allocate -----------------------
 body: { orderIds: number[] }
 Runs allocator across all lines belonging to those orders.
@@ -258,7 +388,7 @@ r.post("/allocate", async (req, res) => {
     // Optional: clear existing SuggAlloc for these lines
     await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
 
-    // Allocation loop (corrected column names & ordering)
+    // Allocation loop
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
@@ -366,163 +496,32 @@ END;
 });
 
 /* ----------------------- POST /api/batch/push -----------------------
-body: { orderIds: number[] }
-Pushes SuggAlloc per order to Extensiv /orders/{id}/allocator
+body: { orderIds: number[], forceMethod?: "auto"|"put"|"post" }
+Pushes SuggAlloc per order to Extensiv /orders/{id}/allocator, with PUT/POST control.
 ------------------------------------------------------------------- */
-
-// POST /api/batch/search-by-batchid
-// body: { batchId: number, pageSize?: number, maxPages?: number }
-r.post("/search-by-batchid", async (req, res) => {
-  try {
-    const base = trimBase(
-      process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com"
-    );
-    const headers = await authHeaders();
-
-    const batchId = toInt(req.body?.batchId, 0);
-    if (!batchId) return res.status(400).json({ ok:false, message:"batchId (number) required" });
-
-    const pageSize = Math.min(toInt(req.body?.pageSize, 250), 500);
-    const maxPages = Math.min(toInt(req.body?.maxPages, 10), 20);
-
-    // Try many likely field paths; stop at the first that returns any orders.
-    const rqlCandidates = [
-      `batchId==${batchId}`,
-      `readOnly.batchId==${batchId}`,
-      `batchIdentifier.id==${batchId}`,
-      `batchIdentifier.batchId==${batchId}`,
-      `readOnly.batchIdentifier.id==${batchId}`,
-      `readOnly.batchIdentifier.batchId==${batchId}`,
-      `batchNumber==${batchId}`,
-      `readOnly.batchNumber==${batchId}`,
-      `batch.id==${batchId}`,
-      `readOnly.batch.id==${batchId}`,
-      `readOnly.batchIdentifier.number==${batchId}`,
-      `batchIdentifier.number==${batchId}`,
-    ];
-
-    const pool = await getPool();
-    const cols = await getExistingCols(pool);
-
-    const tried = [];           // diagnostics
-    let usedRql = null;
-    let importedHeaders = 0;
-    let upsertedLines = 0;
-    const foundOrders = [];
-
-    async function ingestOrders(orders) {
-      for (const ord of orders) {
-        const R = ro(ord);
-        const orderId     = toInt(R.orderId ?? ord.orderId ?? R.OrderId ?? ord.OrderId, 0);
-        const customerId  = toInt(ord?.customerIdentifier?.id, 0);
-        const customerName= s(ord?.customerIdentifier?.name, 200);
-        const referenceNum= s(ord?.referenceNum, 120);
-
-        const lines = itemsFromOrder(ord) || [];
-        const lineObjs = [];
-
-        for (const it of lines) {
-          const IR = ro(it);
-          const orderItemId = toInt(IR.orderItemId ?? it.orderItemId ?? IR.OrderItemId ?? it.OrderItemId, 0);
-          if (!orderItemId) continue;
-
-          const itemId   = toInt(it?.itemIdentifier?.id ?? it?.ItemID ?? 0, 0);
-          const sku      = s(it?.itemIdentifier?.sku ?? it?.sku ?? it?.SKU ?? "", 150);
-          const unitId   = toInt(IR?.unitIdentifier?.id, 0);
-          const unitName = s(IR?.unitIdentifier?.name ?? "", 80);
-          const qualifier= s(it?.qualifier ?? "", 80);
-          const qty      = toInt(it?.qty ?? it?.orderedQty ?? it?.Qty ?? it?.OrderedQty ?? 0, 0);
-
-          await upsertOrderDetail(pool, cols, {
-            OrderItemID: orderItemId,
-            OrderID: orderId,
-            CustomerID: customerId,
-            CustomerName: customerName,
-            SKU: sku,
-            ItemID: itemId,
-            Qualifier: qualifier,
-            OrderedQTY: qty,
-            UnitID: unitId,
-            UnitName: unitName,
-            ReferenceNum: referenceNum,
-          });
-          upsertedLines++;
-
-          lineObjs.push({ orderItemId, itemId, sku, qty, unitId, unitName, qualifier });
-        }
-
-        foundOrders.push({
-          orderId, customerId, customerName, referenceNum,
-          lineCount: lineObjs.length,
-          lines: lineObjs,
-        });
-      }
-    }
-
-    for (const rql of rqlCandidates) {
-      let gotAny = false;
-      let lastStatus = 0;
-
-      for (let pg = 1; pg <= maxPages; pg++) {
-        const { data, status } = await axios.get(`${base}/orders`, {
-          headers,
-          params: { pgsiz: pageSize, pgnum: pg, detail: "OrderItems", itemdetail: "All", rql },
-          timeout: 30000,
-          validateStatus: () => true,
-        });
-        lastStatus = status;
-
-        // record diagnostics (first page only per RQL)
-        if (!tried.length || tried[tried.length - 1].rql !== rql) {
-          const sampleKeys = data && typeof data === "object" ? Object.keys(data).slice(0, 10) : [];
-          tried.push({ rql, status: lastStatus, sampleKeys });
-        }
-
-        if (!(status >= 200 && status < 300)) break;
-
-        const orders = firstArray(data);
-        if (!orders.length) break;
-
-        if (!usedRql) usedRql = rql;
-        gotAny = true;
-        importedHeaders += orders.length;
-        await ingestOrders(orders);
-
-        if (orders.length < pageSize) break; // last page for this RQL
-      }
-
-      if (gotAny) break;  // stop after the first working RQL
-    }
-
-    return res.json({
-      ok: true,
-      usedRql,
-      importedHeaders,
-      upsertedLines,
-      orders: foundOrders,
-      diagnostics: { tried }
-    });
-  } catch (e) {
-    return res
-      .status(e.status || 500)
-      .json({ ok:false, message: e.message, data: e.response?.data || null });
-  }
-});
-
 r.post("/push", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)
       ? req.body.orderIds.map((n) => toInt(n)).filter(Boolean)
       : [];
-    if (!orderIds.length) return res.status(400).json({ ok: false, message: "orderIds required" });
+    if (!orderIds.length) {
+      return res.status(400).json({ ok: false, message: "orderIds required" });
+    }
+
+    // NEW: optional forceMethod from client: 'auto' | 'put' | 'post'
+    const forceMethod = String(req.body?.forceMethod || "auto").toLowerCase();
+    const isValidMethod = (m) => m === "auto" || m === "put" || m === "post";
 
     const base = trimBase(
       process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com"
     );
     const headers = await authHeaders();
-    const pool = await getPool();
+    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    headers["Accept"] = headers["Accept"] || "application/json";
 
+    const pool = await getPool();
     const results = [];
+
     for (const oid of orderIds) {
       const allocs = await pool
         .request()
@@ -543,29 +542,91 @@ r.post("/push", async (req, res) => {
       };
 
       if (payload.allocations.length === 0) {
-        results.push({ orderId: oid, ok: false, status: 204, message: "No allocations" });
+        results.push({
+          orderId: oid,
+          ok: false,
+          status: 204,
+          reason: "No allocations to push (SuggAlloc empty)",
+          sentAllocations: 0,
+        });
         continue;
       }
 
-      const resp = await axios.put(`${base}/orders/${oid}/allocator`, payload, {
-        headers,
-        timeout: 30000,
-        validateStatus: () => true,
-      });
+      const sendAllocator = async (method) => {
+        const url = `${base}/orders/${oid}/allocator`;
+        const resp = await axios({
+          url,
+          method,
+          headers,
+          data: payload,
+          timeout: 30000,
+          validateStatus: () => true,
+        });
+        let body = resp.data;
+        let summary = "";
+        if (body && typeof body === "object") {
+          const keys = Object.keys(body).slice(0, 6).join(", ");
+          summary = `keys: ${keys}`;
+          if (Array.isArray(body.errors) && body.errors.length) {
+            summary += `; errors: ${body.errors.length}`;
+          }
+          if (Array.isArray(body.warnings) && body.warnings.length) {
+            summary += `; warnings: ${body.warnings.length}`;
+          }
+        } else if (typeof body === "string") {
+          summary = body.slice(0, 140);
+        }
+        return { status: resp.status, summary, raw: body };
+      };
+
+      let attempt;
+      if (isValidMethod(forceMethod) && forceMethod !== "auto") {
+        // Force single method
+        attempt = await sendAllocator(forceMethod);
+      } else {
+        // Auto: try PUT → fallback POST on method mismatch
+        attempt = await sendAllocator("put");
+        if ([404, 405, 501].includes(attempt.status)) {
+          const fallback = await sendAllocator("post");
+          if (fallback.status >= 200 && fallback.status < 300) {
+            attempt = { ...fallback, triedFallback: true, primaryStatus: attempt.status };
+          } else {
+            attempt = { ...attempt, fallbackStatus: fallback.status, fallbackSummary: fallback.summary };
+          }
+        }
+      }
+
+      const ok = attempt.status >= 200 && attempt.status < 300;
+      const noOp =
+        ok &&
+        (attempt.status === 204 ||
+          attempt.summary === "" ||
+          attempt.summary?.toLowerCase?.().includes("no change") ||
+          attempt.summary?.toLowerCase?.().includes("no allocations"));
 
       results.push({
         orderId: oid,
-        ok: resp.status >= 200 && resp.status < 300,
-        status: resp.status,
-        data: resp.data,
+        ok: ok && !noOp,
+        status: attempt.status,
+        triedFallback: attempt.triedFallback || false,
+        primaryStatus: attempt.primaryStatus,
+        forcedMethod: (forceMethod !== "auto") ? forceMethod : undefined,
+        sentAllocations: payload.allocations.length,
+        responseSummary: attempt.summary,
+        // responseBody: attempt.raw, // uncomment if you want the full payload
       });
     }
 
-    res.json({ ok: true, results });
+    const anyReal = results.some(r => r.ok === true);
+    const hint = anyReal ? null : "No effective changes detected. Check SuggAlloc rows and method (PUT vs POST) for your tenant.";
+
+    res.json({ ok: true, results, hint });
   } catch (e) {
-    res
-      .status(500)
-      .json({ ok: false, message: e.message, data: e.response?.data || null });
+    res.status(500).json({
+      ok: false,
+      message: e.message,
+      data: e.response?.data || null,
+    });
   }
 });
 

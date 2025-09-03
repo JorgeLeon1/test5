@@ -385,25 +385,83 @@ r.post("/search-by-batchid", async (req, res) => {
     const pageSize = Math.min(toInt(req.body?.pageSize, 250), 500);
     const maxPages = Math.min(toInt(req.body?.maxPages, 10), 20);
 
-    // Try several candidate RQL fields until one returns data.
+    // Try many likely field paths; stop at the first that returns any orders.
     const rqlCandidates = [
-      [`batchId==${batchId}`],
-      [`readOnly.batchId==${batchId}`],
-      [`batchIdentifier.id==${batchId}`],
-      [`batchIdentifier.batchId==${batchId}`],
+      `batchId==${batchId}`,
+      `readOnly.batchId==${batchId}`,
+      `batchIdentifier.id==${batchId}`,
+      `batchIdentifier.batchId==${batchId}`,
+      `readOnly.batchIdentifier.id==${batchId}`,
+      `readOnly.batchIdentifier.batchId==${batchId}`,
+      `batchNumber==${batchId}`,
+      `readOnly.batchNumber==${batchId}`,
+      `batch.id==${batchId}`,
+      `readOnly.batch.id==${batchId}`,
+      `readOnly.batchIdentifier.number==${batchId}`,
+      `batchIdentifier.number==${batchId}`,
     ];
 
     const pool = await getPool();
     const cols = await getExistingCols(pool);
 
+    const tried = [];           // diagnostics
     let usedRql = null;
     let importedHeaders = 0;
     let upsertedLines = 0;
     const foundOrders = [];
 
-    for (const parts of rqlCandidates) {
-      const rql = parts.join(";");
+    async function ingestOrders(orders) {
+      for (const ord of orders) {
+        const R = ro(ord);
+        const orderId     = toInt(R.orderId ?? ord.orderId ?? R.OrderId ?? ord.OrderId, 0);
+        const customerId  = toInt(ord?.customerIdentifier?.id, 0);
+        const customerName= s(ord?.customerIdentifier?.name, 200);
+        const referenceNum= s(ord?.referenceNum, 120);
+
+        const lines = itemsFromOrder(ord) || [];
+        const lineObjs = [];
+
+        for (const it of lines) {
+          const IR = ro(it);
+          const orderItemId = toInt(IR.orderItemId ?? it.orderItemId ?? IR.OrderItemId ?? it.OrderItemId, 0);
+          if (!orderItemId) continue;
+
+          const itemId   = toInt(it?.itemIdentifier?.id ?? it?.ItemID ?? 0, 0);
+          const sku      = s(it?.itemIdentifier?.sku ?? it?.sku ?? it?.SKU ?? "", 150);
+          const unitId   = toInt(IR?.unitIdentifier?.id, 0);
+          const unitName = s(IR?.unitIdentifier?.name ?? "", 80);
+          const qualifier= s(it?.qualifier ?? "", 80);
+          const qty      = toInt(it?.qty ?? it?.orderedQty ?? it?.Qty ?? it?.OrderedQty ?? 0, 0);
+
+          await upsertOrderDetail(pool, cols, {
+            OrderItemID: orderItemId,
+            OrderID: orderId,
+            CustomerID: customerId,
+            CustomerName: customerName,
+            SKU: sku,
+            ItemID: itemId,
+            Qualifier: qualifier,
+            OrderedQTY: qty,
+            UnitID: unitId,
+            UnitName: unitName,
+            ReferenceNum: referenceNum,
+          });
+          upsertedLines++;
+
+          lineObjs.push({ orderItemId, itemId, sku, qty, unitId, unitName, qualifier });
+        }
+
+        foundOrders.push({
+          orderId, customerId, customerName, referenceNum,
+          lineCount: lineObjs.length,
+          lines: lineObjs,
+        });
+      }
+    }
+
+    for (const rql of rqlCandidates) {
       let gotAny = false;
+      let lastStatus = 0;
 
       for (let pg = 1; pg <= maxPages; pg++) {
         const { data, status } = await axios.get(`${base}/orders`, {
@@ -412,7 +470,15 @@ r.post("/search-by-batchid", async (req, res) => {
           timeout: 30000,
           validateStatus: () => true,
         });
-        if (!(status >= 200 && status < 300)) break; // try next candidate
+        lastStatus = status;
+
+        // record diagnostics (first page only per RQL)
+        if (!tried.length || tried[tried.length - 1].rql !== rql) {
+          const sampleKeys = data && typeof data === "object" ? Object.keys(data).slice(0, 10) : [];
+          tried.push({ rql, status: lastStatus, sampleKeys });
+        }
+
+        if (!(status >= 200 && status < 300)) break;
 
         const orders = firstArray(data);
         if (!orders.length) break;
@@ -420,61 +486,22 @@ r.post("/search-by-batchid", async (req, res) => {
         if (!usedRql) usedRql = rql;
         gotAny = true;
         importedHeaders += orders.length;
+        await ingestOrders(orders);
 
-        for (const ord of orders) {
-          const R = ro(ord);
-          const orderId = toInt(R.orderId ?? ord.orderId ?? R.OrderId ?? ord.OrderId, 0);
-          const customerId = toInt(ord?.customerIdentifier?.id, 0);
-          const customerName = s(ord?.customerIdentifier?.name, 200);
-          const referenceNum = s(ord?.referenceNum, 120);
-
-          const lines = itemsFromOrder(ord);
-          const lineObjs = [];
-
-          for (const it of lines) {
-            const IR = ro(it);
-            const orderItemId = toInt(IR.orderItemId ?? it.orderItemId ?? IR.OrderItemId ?? it.OrderItemId, 0);
-            if (!orderItemId) continue;
-
-            const itemId   = toInt(it?.itemIdentifier?.id ?? it?.ItemID ?? 0, 0);
-            const sku      = s(it?.itemIdentifier?.sku ?? it?.sku ?? it?.SKU ?? "", 150);
-            const unitId   = toInt(IR?.unitIdentifier?.id, 0);
-            const unitName = s(IR?.unitIdentifier?.name ?? "", 80);
-            const qualifier= s(it?.qualifier ?? "", 80);
-            const qty      = toInt(it?.qty ?? it?.orderedQty ?? it?.Qty ?? it?.OrderedQty ?? 0, 0);
-
-            await upsertOrderDetail(pool, cols, {
-              OrderItemID: orderItemId,
-              OrderID: orderId,
-              CustomerID: customerId,
-              CustomerName: customerName,
-              SKU: sku,
-              ItemID: itemId,            // numeric for Inventory join
-              Qualifier: qualifier,
-              OrderedQTY: qty,
-              UnitID: unitId,
-              UnitName: unitName,
-              ReferenceNum: referenceNum,
-            });
-            upsertedLines++;
-
-            lineObjs.push({ orderItemId, itemId, sku, qty, unitId, unitName, qualifier });
-          }
-
-          foundOrders.push({
-            orderId, customerId, customerName, referenceNum,
-            lineCount: lineObjs.length,
-            lines: lineObjs,
-          });
-        }
-
-        if (orders.length < pageSize) break; // last page for this candidate
+        if (orders.length < pageSize) break; // last page for this RQL
       }
 
-      if (gotAny) break; // stop after first candidate that worked
+      if (gotAny) break;  // stop after the first working RQL
     }
 
-    return res.json({ ok:true, usedRql, importedHeaders, upsertedLines, orders: foundOrders });
+    return res.json({
+      ok: true,
+      usedRql,
+      importedHeaders,
+      upsertedLines,
+      orders: foundOrders,
+      diagnostics: { tried }
+    });
   } catch (e) {
     return res
       .status(e.status || 500)

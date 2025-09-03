@@ -24,7 +24,6 @@ function firstArray(obj) {
   return [];
 }
 
-
 /** Get items/lines from an order across shapes */
 function itemsFromOrder(ord) {
   const em = ord?._embedded;
@@ -84,15 +83,7 @@ ELSE
 
 /* ======================= ROUTES ======================= */
 
-/* ----------------------- GET /api/batch/search -----------------------
-Query params (all optional):
-  - status=AWAITINGPICK|OPEN|...  (mapped to codes below if known)
-  - modifiedSince=YYYY-MM-DD (only used if provided)
-  - customerId=79
-  - referenceLike=PO123   (referenceNum contains)
-  - pageSize=100&maxPages=5
-By default we DO NOT filter by time and we DO require fullyAllocated==false.
---------------------------------------------------------------------- */
+/* ----------------------- GET /api/batch/search ----------------------- */
 r.get("/search", async (req, res) => {
   try {
     const base = trimBase(
@@ -107,12 +98,7 @@ r.get("/search", async (req, res) => {
     rql.push("readOnly.fullyAllocated==false");
 
     if (req.query.status) {
-      const statusMap = {
-        AWAITINGPICK: 0,
-        OPEN: 0,
-        CLOSED: 9,
-        CANCELLED: 5,
-      };
+      const statusMap = { AWAITINGPICK: 0, OPEN: 0, CLOSED: 9, CANCELLED: 5 };
       const code = statusMap[String(req.query.status).toUpperCase()];
       if (Number.isFinite(code)) rql.push(`readOnly.status==${code}`);
     }
@@ -180,7 +166,7 @@ r.get("/search", async (req, res) => {
             CustomerID: customerId,
             CustomerName: customerName,
             SKU: sku,
-            ItemID: itemIdRaw, // store as VARCHAR
+            ItemID: itemIdRaw,
             Qualifier: qualifier,
             OrderedQTY: qty,
             UnitID: unitId,
@@ -211,10 +197,7 @@ r.get("/search", async (req, res) => {
   }
 });
 
-/* ----------------------- POST /api/batch/search-by-batchid -----------------------
-body: { batchId: number, pageSize?: number, maxPages?: number }
-Tries multiple RQL paths to find orders by batch.
---------------------------------------------------------------------- */
+/* ----------------------- POST /api/batch/search-by-batchid ----------------------- */
 r.post("/search-by-batchid", async (req, res) => {
   try {
     const base = trimBase(
@@ -281,7 +264,7 @@ r.post("/search-by-batchid", async (req, res) => {
             CustomerID: customerId,
             CustomerName: customerName,
             SKU: sku,
-            ItemID: itemIdRaw, // VARCHAR
+            ItemID: itemIdRaw,
             Qualifier: qualifier,
             OrderedQTY: qty,
             UnitID: unitId,
@@ -306,7 +289,6 @@ r.post("/search-by-batchid", async (req, res) => {
 
     for (const rql of rqlCandidates) {
       let gotAny = false;
-      let lastStatus = 0;
 
       for (let pg = 1; pg <= maxPages; pg++) {
         const { data, status } = await axios.get(`${base}/orders`, {
@@ -315,11 +297,10 @@ r.post("/search-by-batchid", async (req, res) => {
           timeout: 30000,
           validateStatus: () => true,
         });
-        lastStatus = status;
 
         if (!tried.length || tried[tried.length - 1].rql !== rql) {
           const sampleKeys = data && typeof data === "object" ? Object.keys(data).slice(0, 10) : [];
-          tried.push({ rql, status: lastStatus, sampleKeys });
+          tried.push({ rql, status, sampleKeys });
         }
 
         if (!(status >= 200 && status < 300)) break;
@@ -353,10 +334,7 @@ r.post("/search-by-batchid", async (req, res) => {
   }
 });
 
-/* ----------------------- POST /api/batch/search-by-ids -----------------------
-body: { orderIds: number[] }
-Returns what's already in OrderDetails for those orders (no Extensiv call).
---------------------------------------------------------------------- */
+/* ----------------------- POST /api/batch/search-by-ids ----------------------- */
 r.post("/search-by-ids", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)
@@ -430,24 +408,25 @@ r.post("/allocate", async (req, res) => {
     // Clear existing SuggAlloc for these lines (idempotent)
     await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
 
-    // Build a CSV for use inside T-SQL
+    // CSV used inside batch T-SQL
     const lineIdCsv = lineIds.join(",");
+    const whereScope = scope === "global" ? "" : `WHERE OrderItemID IN (${lineIdCsv})`;
 
-    // Allocation loop with scoped RemainingAvailable and progressive matching
+    // Allocation loop WITH all CTEs placed *inside* WHILE (this fixes the syntax error)
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
 
--- Scope: only subtract SuggAlloc for the selected orders (default)
-;WITH sa_recv AS (
-  SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
-  FROM SuggAlloc
-  ${scope === "global" ? "" : `WHERE OrderItemID IN (${lineIdCsv})`}
-  GROUP BY ReceiveItemID
-)
 WHILE (1=1)
 BEGIN
-  ;WITH odx AS (
+  ;WITH
+  sa_recv AS (
+    SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
+    FROM SuggAlloc
+    ${whereScope}
+    GROUP BY ReceiveItemID
+  ),
+  odx AS (
     SELECT
       od.OrderItemID,
       od.OrderedQTY,
@@ -485,7 +464,6 @@ BEGIN
     FROM Inventory inv
     LEFT JOIN sa_recv sr ON sr.ReceiveItemID = inv.ReceiveItemID
   ),
-
   -- Tier 1: ItemID + Qualifier
   cand_t1 AS (
     SELECT
@@ -502,7 +480,6 @@ BEGIN
       AND x.ItemIDNum IS NOT NULL
       AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
-
   -- Tier 2: SKU + Qualifier
   cand_t2 AS (
     SELECT
@@ -519,8 +496,7 @@ BEGIN
       AND x.ItemIDNum IS NULL
       AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
-
-  -- Tier 3: SKU only (ignore Qualifier) if t1/t2 had no options for this line
+  -- Tier 3: SKU only (ignore Qualifier) if t1/t2 had no options
   cand_t3 AS (
     SELECT
       x.OrderItemID,
@@ -536,7 +512,6 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM cand_t1 t1 WHERE t1.OrderItemID = x.OrderItemID)
       AND NOT EXISTS (SELECT 1 FROM cand_t2 t2 WHERE t2.OrderItemID = x.OrderItemID)
   ),
-
   cand AS (
     SELECT * FROM cand_t1
     UNION ALL
@@ -544,7 +519,6 @@ BEGIN
     UNION ALL
     SELECT * FROM cand_t3
   ),
-
   pick AS (
     SELECT TOP (1)
       c.OrderItemID,
@@ -556,7 +530,6 @@ BEGIN
     FROM cand c
     ORDER BY c.OrderItemID, c.Priority ASC, c.RemainingAvailable DESC
   )
-
   INSERT INTO SuggAlloc (OrderItemID, ReceiveItemID, SuggAllocQty)
   SELECT OrderItemID, ReceiveItemID, AllocQty FROM pick;
 
@@ -598,15 +571,12 @@ END;
   }
 });
 
-
-// POST /api/inventory/by-skus
-// body: { skus: string[] }
+/* ----------------------- POST /api/inventory/by-skus ----------------------- */
 r.post("/inventory/by-skus", async (req, res) => {
   try {
     const skus = Array.isArray(req.body?.skus) ? req.body.skus : [];
     if (!skus.length) return res.json({ ok:true, items: [] });
 
-    // Normalize to uppercase/trim for display parity with allocator
     const skuList = skus.map(s => `'${String(s).trim().toUpperCase().replace(/'/g, "''")}'`).join(",");
 
     const pool = await getPool();
@@ -638,9 +608,7 @@ r.post("/inventory/by-skus", async (req, res) => {
   }
 });
 
-// POST /api/batch/inventory-debug
-// body: { orderIds: number[] }
-// Shows candidate counts per tier for each line so you can see *why* nothing was picked.
+/* ----------------------- POST /api/batch/inventory-debug ----------------------- */
 r.post("/batch/inventory-debug", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)
@@ -696,7 +664,6 @@ r.post("/batch/inventory-debug", async (req, res) => {
 
 /* ----------------------- POST /api/batch/push -----------------------
 body: { orderIds: number[], forceMethod?: "auto"|"put"|"post" }
-Pushes SuggAlloc per order to Extensiv /orders/{id}/allocator, with PUT/POST control.
 ------------------------------------------------------------------- */
 r.post("/push", async (req, res) => {
   try {
@@ -721,7 +688,6 @@ r.post("/push", async (req, res) => {
     const results = [];
 
     for (const oid of orderIds) {
-      // Pull allocations for this order
       const allocs = await pool
         .request()
         .input("OrderID", sql.Int, oid)
@@ -810,7 +776,6 @@ r.post("/push", async (req, res) => {
         forcedMethod: forceMethod !== "auto" ? forceMethod : undefined,
         sentAllocations: payload.allocations.length,
         responseSummary: attempt.summary,
-        // responseBody: attempt.raw, // optionally include for debugging
       });
     }
 

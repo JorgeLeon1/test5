@@ -364,6 +364,8 @@ r.post("/search-by-batchid", async (req, res) => {
 /* ----------------------- POST /api/batch/allocate -----------------------
 body: { orderIds: number[] }
 Runs allocator across all lines belonging to those orders.
+- Backfills OrderDetails.ItemID from Inventory by (SKU, Qualifier) if missing
+- Matches inventory by ItemID OR (SKU when ItemID is 0)
 ----------------------------------------------------------------------- */
 r.post("/allocate", async (req, res) => {
   try {
@@ -376,7 +378,7 @@ r.post("/allocate", async (req, res) => {
 
     const pool = await getPool();
 
-    // Resolve line IDs for those orders
+    // 0) Ensure we have OrderDetails rows for these orders
     const idQuery = await pool.request().query(`
       SELECT OrderItemID
       FROM OrderDetails
@@ -385,10 +387,29 @@ r.post("/allocate", async (req, res) => {
     const lineIds = idQuery.recordset.map((r) => r.OrderItemID);
     if (!lineIds.length) return res.json({ ok: true, allocated: 0, summary: [] });
 
-    // Optional: clear existing SuggAlloc for these lines
-    await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
+    // 1) Backfill ItemID using Inventory by (SKU, Qualifier) when ItemID is NULL/0
+    //    This makes the ItemID join sargable and helps the allocator find inventory.
+    await pool.request().query(`
+      UPDATE od
+      SET od.ItemID = inv.ItemID
+      FROM OrderDetails od
+      JOIN Inventory inv
+        ON inv.SKU = od.SKU
+       AND (inv.Qualifier = od.Qualifier OR (inv.Qualifier IS NULL AND od.Qualifier IS NULL))
+      WHERE od.OrderID IN (${orderIds.join(",")})
+        AND (od.ItemID IS NULL OR od.ItemID = 0)
+        AND inv.ItemID IS NOT NULL
+    `);
 
-    // Allocation loop
+    // 2) Clear existing SuggAlloc for these lines (optional, but keeps things idempotent)
+    await pool.request().query(`
+      DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});
+    `);
+
+    // 3) Allocation loop:
+    //    Build candidate inventory using two branches:
+    //     - Branch A: ItemID match (preferred)
+    //     - Branch B: SKU match when ItemID is 0/NULL
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
@@ -408,7 +429,7 @@ BEGIN
     ) sa ON sa.OrderItemID = od.OrderItemID
     WHERE od.OrderItemID IN (${lineIds.join(",")})
   ),
-  cand AS (
+  cand_itemid AS (  -- preferred path: ItemID match
     SELECT
       x.OrderItemID,
       x.OrderedQTY,
@@ -427,16 +448,56 @@ BEGIN
         WHEN inv.ReceivedQty >  inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty >= inv.AvailableQTY THEN 6
         WHEN SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty <= inv.AvailableQTY THEN 7
         WHEN SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty <= inv.AvailableQTY THEN 8
-      END AS Seq
+      END AS Seq,
+      1 AS Priority -- ItemID match has higher priority
     FROM x
     JOIN OrderDetails od ON od.OrderItemID = x.OrderItemID
     JOIN Inventory inv
       ON inv.ItemID = od.ItemID
-     AND inv.Qualifier = od.Qualifier
+     AND (inv.Qualifier = od.Qualifier OR (inv.Qualifier IS NULL AND od.Qualifier IS NULL))
     WHERE
       x.RemainingOpenQty > 0
+      AND od.ItemID IS NOT NULL
+      AND od.ItemID <> 0
       AND inv.AvailableQTY > 0
       AND inv.ReceiveItemID NOT IN (SELECT DISTINCT ReceiveItemID FROM SuggAlloc)
+  ),
+  cand_sku AS (  -- fallback path: SKU match when ItemID is missing
+    SELECT
+      x.OrderItemID,
+      x.OrderedQTY,
+      x.SumSuggAllocQty,
+      x.RemainingOpenQty,
+      inv.ReceiveItemID,
+      inv.AvailableQTY,
+      inv.ReceivedQty,
+      inv.LocationName,
+      CASE
+        WHEN inv.ReceivedQty = inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty = inv.AvailableQTY THEN 1
+        WHEN inv.ReceivedQty = inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty = inv.AvailableQTY THEN 2
+        WHEN inv.ReceivedQty = inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty >  inv.AvailableQTY THEN 3
+        WHEN inv.ReceivedQty = inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty >  inv.AvailableQTY THEN 4
+        WHEN inv.ReceivedQty >  inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty >= inv.AvailableQTY THEN 5
+        WHEN inv.ReceivedQty >  inv.AvailableQTY AND SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty >= inv.AvailableQTY THEN 6
+        WHEN SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty <= inv.AvailableQTY THEN 7
+        WHEN SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty <= inv.AvailableQTY THEN 8
+      END AS Seq,
+      2 AS Priority -- fallback
+    FROM x
+    JOIN OrderDetails od ON od.OrderItemID = x.OrderItemID
+    JOIN Inventory inv
+      ON inv.SKU = od.SKU
+     AND (inv.Qualifier = od.Qualifier OR (inv.Qualifier IS NULL AND od.Qualifier IS NULL))
+    WHERE
+      x.RemainingOpenQty > 0
+      AND (od.ItemID IS NULL OR od.ItemID = 0)
+      AND inv.AvailableQTY > 0
+      AND inv.ReceiveItemID NOT IN (SELECT DISTINCT ReceiveItemID FROM SuggAlloc)
+  ),
+  cand AS (
+    SELECT * FROM cand_itemid
+    UNION ALL
+    SELECT * FROM cand_sku
   ),
   pick AS (
     SELECT TOP (1)
@@ -444,10 +505,12 @@ BEGIN
       c.ReceiveItemID,
       CASE WHEN c.RemainingOpenQty >= c.AvailableQTY THEN c.AvailableQTY ELSE c.RemainingOpenQty END AS AllocQty,
       c.Seq,
-      c.AvailableQTY
+      c.AvailableQTY,
+      c.Priority
     FROM cand c
     ORDER BY
       c.OrderItemID,
+      c.Priority ASC,    -- prefer ItemID branch
       c.Seq ASC,
       CASE
         WHEN c.Seq IN (1,2,3,4,5,6) THEN c.AvailableQTY + 0
@@ -476,6 +539,7 @@ BEGIN
 END;
     `);
 
+    // 4) Return summary
     const summary = await pool.request().query(`
       SELECT od.OrderID, od.OrderItemID, od.SKU, od.OrderedQTY,
              ISNULL(x.Alloc,0) AS Allocated,
@@ -494,6 +558,7 @@ END;
     res.status(500).json({ ok: false, message: e.message });
   }
 });
+
 
 /* ----------------------- POST /api/batch/push -----------------------
 body: { orderIds: number[], forceMethod?: "auto"|"put"|"post" }

@@ -363,6 +363,8 @@ r.post("/search-by-batchid", async (req, res) => {
 
 /* ----------------------- POST /api/batch/allocate -----------------------
 body: { orderIds: number[] }
+Finds inventory by ItemID (numeric) or falls back to SKU; normalizes Qualifier; 
+uses RemainingAvailable per ReceiveItemID to avoid over/under allocation.
 ----------------------------------------------------------------------- */
 r.post("/allocate", async (req, res) => {
   try {
@@ -382,16 +384,17 @@ r.post("/allocate", async (req, res) => {
       WHERE OrderID IN (${orderIds.join(",")})
     `);
     const lineIds = idQuery.recordset.map(r => r.OrderItemID);
-    if (!lineIds.length) {
-      return res.json({ ok: true, allocated: 0, summary: [] });
-    }
+    if (!lineIds.length) return res.json({ ok: true, allocated: 0, summary: [] });
 
-    // Clear existing allocations
+    // Clear existing allocations for these lines (idempotent)
     await pool.request().query(`
       DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});
     `);
 
-    // Allocation loop with safe TRY_CONVERT
+    // Allocation loop:
+    // - Qualifier is normalized to NULL when empty/whitespace
+    // - ItemIDNum derived with TRY_CONVERT(INT, ItemID)
+    // - RemainingAvailable = AvailableQTY - SUM(SuggAlloc on that ReceiveItemID)
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
@@ -403,7 +406,7 @@ BEGIN
       od.OrderItemID,
       od.OrderedQTY,
       od.SKU,
-      od.Qualifier,
+      NULLIF(LTRIM(RTRIM(od.Qualifier)),'') AS QualNorm,
       TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum
     FROM OrderDetails od
     WHERE od.OrderItemID IN (${lineIds.join(",")})
@@ -412,52 +415,70 @@ BEGIN
     SELECT
       o.OrderItemID,
       o.OrderedQTY,
-      ISNULL(sa.SumSuggAllocQty,0) AS SumSuggAllocQty,
-      (o.OrderedQTY - ISNULL(sa.SumSuggAllocQty,0)) AS RemainingOpenQty,
       o.SKU,
-      o.Qualifier,
-      o.ItemIDNum
+      o.QualNorm,
+      o.ItemIDNum,
+      ISNULL(sa.SumSuggAllocQty,0) AS SumSuggAllocQty,
+      (o.OrderedQTY - ISNULL(sa.SumSuggAllocQty,0)) AS RemainingOpenQty
     FROM odx o
     LEFT JOIN (
       SELECT OrderItemID, SUM(ISNULL(SuggAllocQty,0)) AS SumSuggAllocQty
       FROM SuggAlloc GROUP BY OrderItemID
     ) sa ON sa.OrderItemID = o.OrderItemID
   ),
+  invx AS (
+    -- Normalize inventory qualifier; compute remaining available per receipt
+    SELECT
+      inv.ReceiveItemID,
+      inv.ItemID,
+      inv.SKU,
+      NULLIF(LTRIM(RTRIM(inv.Qualifier)),'') AS QualNorm,
+      inv.LocationName,
+      inv.ReceivedQty,
+      inv.AvailableQTY,
+      (inv.AvailableQTY - ISNULL(sa2.AllocOnReceive,0)) AS RemainingAvailable
+    FROM Inventory inv
+    LEFT JOIN (
+      SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
+      FROM SuggAlloc
+      GROUP BY ReceiveItemID
+    ) sa2 ON sa2.ReceiveItemID = inv.ReceiveItemID
+  ),
+  -- Preferred candidates: numeric ItemID match
   cand_itemid AS (
     SELECT
       x.OrderItemID,
-      x.OrderedQTY,
       x.RemainingOpenQty,
-      inv.ReceiveItemID,
-      inv.AvailableQTY,
-      inv.ReceivedQty,
-      inv.LocationName,
+      ivx.ReceiveItemID,
+      ivx.RemainingAvailable,
+      ivx.LocationName,
       1 AS Priority
     FROM x
-    JOIN Inventory inv
-      ON inv.ItemID = x.ItemIDNum
-     AND (inv.Qualifier = x.Qualifier OR (inv.Qualifier IS NULL AND x.Qualifier IS NULL))
-    WHERE x.RemainingOpenQty > 0
+    JOIN invx ivx
+      ON ivx.ItemID = x.ItemIDNum
+     AND (ivx.QualNorm = x.QualNorm OR (ivx.QualNorm IS NULL AND x.QualNorm IS NULL))
+    WHERE
+      x.RemainingOpenQty > 0
       AND x.ItemIDNum IS NOT NULL
-      AND inv.AvailableQTY > 0
+      AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
+  -- Fallback candidates: match by SKU
   cand_sku AS (
     SELECT
       x.OrderItemID,
-      x.OrderedQTY,
       x.RemainingOpenQty,
-      inv.ReceiveItemID,
-      inv.AvailableQTY,
-      inv.ReceivedQty,
-      inv.LocationName,
+      ivx.ReceiveItemID,
+      ivx.RemainingAvailable,
+      ivx.LocationName,
       2 AS Priority
     FROM x
-    JOIN Inventory inv
-      ON inv.SKU = x.SKU
-     AND (inv.Qualifier = x.Qualifier OR (inv.Qualifier IS NULL AND x.Qualifier IS NULL))
-    WHERE x.RemainingOpenQty > 0
+    JOIN invx ivx
+      ON ivx.SKU = x.SKU
+     AND (ivx.QualNorm = x.QualNorm OR (ivx.QualNorm IS NULL AND x.QualNorm IS NULL))
+    WHERE
+      x.RemainingOpenQty > 0
       AND x.ItemIDNum IS NULL
-      AND inv.AvailableQTY > 0
+      AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
   cand AS (
     SELECT * FROM cand_itemid
@@ -468,18 +489,26 @@ BEGIN
     SELECT TOP (1)
       c.OrderItemID,
       c.ReceiveItemID,
-      CASE WHEN c.RemainingOpenQty >= c.AvailableQTY THEN c.AvailableQTY ELSE c.RemainingOpenQty END AS AllocQty,
+      CASE 
+        WHEN c.RemainingOpenQty >= c.RemainingAvailable THEN c.RemainingAvailable 
+        ELSE c.RemainingOpenQty 
+      END AS AllocQty,
       c.Priority
     FROM cand c
-    ORDER BY c.OrderItemID, c.Priority ASC
+    ORDER BY
+      c.OrderItemID,
+      c.Priority ASC,           -- prefer ItemID match
+      c.RemainingAvailable DESC -- then take the biggest chunk
   )
   INSERT INTO SuggAlloc (OrderItemID, ReceiveItemID, SuggAllocQty)
   SELECT OrderItemID, ReceiveItemID, AllocQty FROM pick;
 
   IF @@ROWCOUNT = 0 BREAK;
+
   SET @iters += 1;
   IF @iters >= @maxIters BREAK;
 
+  -- Stop when all selected lines are fully allocated
   IF NOT EXISTS (
     SELECT 1
     FROM x
@@ -493,7 +522,7 @@ BEGIN
 END;
     `);
 
-    // Summarize
+    // Summary
     const summary = await pool.request().query(`
       SELECT od.OrderID, od.OrderItemID, od.SKU, od.OrderedQTY,
              ISNULL(x.Alloc,0) AS Allocated,

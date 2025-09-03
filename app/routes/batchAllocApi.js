@@ -371,19 +371,8 @@ r.post("/search-by-ids", async (req, res) => {
   }
 });
 
-/* ----------------------- POST /api/batch/allocate -----------------------
-body: {
-  orderIds: number[],
-  scope?: "selected" | "global"   // default "selected"
-}
-Allocator (progressive match):
-  T1: ItemID (numeric) + Qualifier
-  T2: SKU + Qualifier
-  T3: SKU only (ignore Qualifier) IF T1/T2 found nothing for that line
-RemainingAvailable is computed from SuggAlloc:
-  - scope="selected"  -> subtract only SuggAlloc for selected orders (default)
-  - scope="global"    -> subtract all SuggAlloc in the table
------------------------------------------------------------------------ */
+// POST /api/batch/allocate
+// body: { orderIds: number[], scope?: "selected"|"global" }
 r.post("/allocate", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)
@@ -396,23 +385,28 @@ r.post("/allocate", async (req, res) => {
 
     const pool = await getPool();
 
-    // Collect selected line IDs (and keep them for scoped subtraction)
+    // Gather selected line IDs up-front
     const sel = await pool.request().query(`
       SELECT OrderItemID
       FROM OrderDetails
       WHERE OrderID IN (${orderIds.join(",")})
     `);
     const lineIds = sel.recordset.map(r => r.OrderItemID);
-    if (!lineIds.length) return res.json({ ok: true, allocated: 0, summary: [] });
+    if (!lineIds.length) return res.json({ ok: true, scope, allocated: 0, summary: [] });
 
-    // Clear existing SuggAlloc for these lines (idempotent)
+    // Clear allocations ONLY for these lines
     await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
 
-    // CSV used inside batch T-SQL
     const lineIdCsv = lineIds.join(",");
     const whereScope = scope === "global" ? "" : `WHERE OrderItemID IN (${lineIdCsv})`;
 
-    // Allocation loop WITH all CTEs placed *inside* WHILE (this fixes the syntax error)
+    // Safer allocator:
+    // - ItemID can be numeric or alphanumeric (e.g. "VX-177-PK")
+    // - Match order<->inventory by:
+    //     T1a: numeric ItemID = numeric ItemID AND qualifiers equal
+    //     T1b: string ItemID = string ItemID (case/space-insensitive) AND qualifiers equal
+    //     T2 : SKU + qualifier
+    //     T3 : SKU only (if T1/T2 had zero options for that line)
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
@@ -430,8 +424,9 @@ BEGIN
     SELECT
       od.OrderItemID,
       od.OrderedQTY,
-      UPPER(LTRIM(RTRIM(od.SKU)))                    AS SKU_N,
-      NULLIF(UPPER(LTRIM(RTRIM(od.Qualifier))),'')   AS Qual_N,
+      UPPER(LTRIM(RTRIM(od.SKU)))                              AS SKU_N,
+      NULLIF(UPPER(LTRIM(RTRIM(od.Qualifier))),'')             AS Qual_N,
+      UPPER(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(128)))))     AS ItemIDStr,
       TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum
     FROM OrderDetails od
     WHERE od.OrderItemID IN (${lineIdCsv})
@@ -442,6 +437,7 @@ BEGIN
       o.OrderedQTY,
       o.SKU_N,
       o.Qual_N,
+      o.ItemIDStr,
       o.ItemIDNum,
       ISNULL(sa.SumSuggAllocQty,0) AS SumSuggAllocQty,
       (o.OrderedQTY - ISNULL(sa.SumSuggAllocQty,0)) AS RemainingOpenQty
@@ -454,9 +450,11 @@ BEGIN
   invx AS (
     SELECT
       inv.ReceiveItemID,
-      inv.ItemID,
-      UPPER(LTRIM(RTRIM(inv.SKU)))                  AS SKU_N,
-      NULLIF(UPPER(LTRIM(RTRIM(inv.Qualifier))),'') AS Qual_N,
+      -- Inventory ItemID normalized both ways
+      UPPER(LTRIM(RTRIM(CAST(inv.ItemID AS VARCHAR(128)))))     AS ItemIDStr,
+      TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(inv.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum,
+      UPPER(LTRIM(RTRIM(inv.SKU)))                              AS SKU_N,
+      NULLIF(UPPER(LTRIM(RTRIM(inv.Qualifier))),'')             AS Qual_N,
       inv.LocationName,
       inv.ReceivedQty,
       inv.AvailableQTY,
@@ -464,61 +462,62 @@ BEGIN
     FROM Inventory inv
     LEFT JOIN sa_recv sr ON sr.ReceiveItemID = inv.ReceiveItemID
   ),
-  -- Tier 1: ItemID + Qualifier
-  cand_t1 AS (
-    SELECT
-      x.OrderItemID,
-      x.RemainingOpenQty,
-      ivx.ReceiveItemID,
-      ivx.RemainingAvailable,
-      1 AS Priority
+
+  -- Tier 1a: numeric ItemID equality + Qualifier
+  cand_t1a AS (
+    SELECT x.OrderItemID, x.RemainingOpenQty, ivx.ReceiveItemID, ivx.RemainingAvailable, 1 AS Priority
     FROM x
     JOIN invx ivx
-      ON ivx.ItemID = x.ItemIDNum
-     AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
-    WHERE x.RemainingOpenQty > 0
-      AND x.ItemIDNum IS NOT NULL
-      AND ISNULL(ivx.RemainingAvailable,0) > 0
+         ON ivx.ItemIDNum IS NOT NULL AND x.ItemIDNum IS NOT NULL
+        AND ivx.ItemIDNum = x.ItemIDNum
+        AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
+    WHERE x.RemainingOpenQty > 0 AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
+
+  -- Tier 1b: non-numeric ItemID string equality + Qualifier
+  cand_t1b AS (
+    SELECT x.OrderItemID, x.RemainingOpenQty, ivx.ReceiveItemID, ivx.RemainingAvailable, 1 AS Priority
+    FROM x
+    JOIN invx ivx
+         ON (x.ItemIDNum IS NULL OR ivx.ItemIDNum IS NULL)       -- at least one side non-numeric
+        AND x.ItemIDStr IS NOT NULL AND x.ItemIDStr <> ''
+        AND ivx.ItemIDStr = x.ItemIDStr
+        AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
+    WHERE x.RemainingOpenQty > 0 AND ISNULL(ivx.RemainingAvailable,0) > 0
+  ),
+
   -- Tier 2: SKU + Qualifier
   cand_t2 AS (
-    SELECT
-      x.OrderItemID,
-      x.RemainingOpenQty,
-      ivx.ReceiveItemID,
-      ivx.RemainingAvailable,
-      2 AS Priority
+    SELECT x.OrderItemID, x.RemainingOpenQty, ivx.ReceiveItemID, ivx.RemainingAvailable, 2 AS Priority
     FROM x
     JOIN invx ivx
-      ON ivx.SKU_N = x.SKU_N
-     AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
-    WHERE x.RemainingOpenQty > 0
-      AND x.ItemIDNum IS NULL
-      AND ISNULL(ivx.RemainingAvailable,0) > 0
+         ON ivx.SKU_N = x.SKU_N
+        AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
+    WHERE x.RemainingOpenQty > 0 AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
-  -- Tier 3: SKU only (ignore Qualifier) if t1/t2 had no options
+
+  -- Tier 3: SKU only (if T1/T2 had no options for that line)
   cand_t3 AS (
-    SELECT
-      x.OrderItemID,
-      x.RemainingOpenQty,
-      ivx.ReceiveItemID,
-      ivx.RemainingAvailable,
-      3 AS Priority
+    SELECT x.OrderItemID, x.RemainingOpenQty, ivx.ReceiveItemID, ivx.RemainingAvailable, 3 AS Priority
     FROM x
-    JOIN invx ivx
-      ON ivx.SKU_N = x.SKU_N
+    JOIN invx ivx ON ivx.SKU_N = x.SKU_N
     WHERE x.RemainingOpenQty > 0
       AND ISNULL(ivx.RemainingAvailable,0) > 0
-      AND NOT EXISTS (SELECT 1 FROM cand_t1 t1 WHERE t1.OrderItemID = x.OrderItemID)
-      AND NOT EXISTS (SELECT 1 FROM cand_t2 t2 WHERE t2.OrderItemID = x.OrderItemID)
+      AND NOT EXISTS (SELECT 1 FROM cand_t1a t WHERE t.OrderItemID = x.OrderItemID)
+      AND NOT EXISTS (SELECT 1 FROM cand_t1b t WHERE t.OrderItemID = x.OrderItemID)
+      AND NOT EXISTS (SELECT 1 FROM cand_t2  t WHERE t.OrderItemID = x.OrderItemID)
   ),
+
   cand AS (
-    SELECT * FROM cand_t1
+    SELECT * FROM cand_t1a
+    UNION ALL
+    SELECT * FROM cand_t1b
     UNION ALL
     SELECT * FROM cand_t2
     UNION ALL
     SELECT * FROM cand_t3
   ),
+
   pick AS (
     SELECT TOP (1)
       c.OrderItemID,
@@ -551,7 +550,7 @@ BEGIN
 END;
     `);
 
-    // Summary
+    // Return a per-line summary (what the UI shows)
     const summary = await pool.request().query(`
       SELECT od.OrderID, od.OrderItemID, od.SKU, od.OrderedQTY,
              ISNULL(x.Alloc,0) AS Allocated,

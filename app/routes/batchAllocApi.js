@@ -394,44 +394,57 @@ r.post("/search-by-ids", async (req, res) => {
 });
 
 /* ----------------------- POST /api/batch/allocate -----------------------
-body: { orderIds: number[] }
+body: {
+  orderIds: number[],
+  scope?: "selected" | "global"   // default "selected"
+}
 Allocator (progressive match):
-  T1: ItemID (numeric) + Qualifier  → preferred
-  T2: SKU + Qualifier               → fallback
-  T3: SKU (ignore Qualifier)        → last resort
-All comparisons use normalized fields:
-  - SKU_N = UPPER(TRIM(SKU))
-  - Qual_N = NULL when blank; else UPPER(TRIM(qual))
-RemainingAvailable = AvailableQTY - SUM(SuggAlloc on that ReceiveItemID)
+  T1: ItemID (numeric) + Qualifier
+  T2: SKU + Qualifier
+  T3: SKU only (ignore Qualifier) IF T1/T2 found nothing for that line
+RemainingAvailable is computed from SuggAlloc:
+  - scope="selected"  -> subtract only SuggAlloc for selected orders (default)
+  - scope="global"    -> subtract all SuggAlloc in the table
 ----------------------------------------------------------------------- */
 r.post("/allocate", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)
-      ? req.body.orderIds.map((n) => (Number.isFinite(Number(n)) ? Math.trunc(Number(n)) : 0)).filter(Boolean)
+      ? req.body.orderIds.map(n => (Number.isFinite(Number(n)) ? Math.trunc(Number(n)) : 0)).filter(Boolean)
       : [];
     if (!orderIds.length) {
       return res.status(400).json({ ok: false, message: "orderIds required" });
     }
+    const scope = (String(req.body?.scope || "selected").toLowerCase() === "global") ? "global" : "selected";
 
     const pool = await getPool();
 
-    // Collect selected lines
-    const idQuery = await pool.request().query(`
+    // Collect selected line IDs (and keep them for scoped subtraction)
+    const sel = await pool.request().query(`
       SELECT OrderItemID
       FROM OrderDetails
       WHERE OrderID IN (${orderIds.join(",")})
     `);
-    const lineIds = idQuery.recordset.map(r => r.OrderItemID);
+    const lineIds = sel.recordset.map(r => r.OrderItemID);
     if (!lineIds.length) return res.json({ ok: true, allocated: 0, summary: [] });
 
-    // Clear existing SuggAlloc for idempotent run
+    // Clear existing SuggAlloc for these lines (idempotent)
     await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
 
-    // Progressive allocation loop
+    // Build a CSV for use inside T-SQL
+    const lineIdCsv = lineIds.join(",");
+
+    // Allocation loop with scoped RemainingAvailable and progressive matching
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
 
+-- Scope: only subtract SuggAlloc for the selected orders (default)
+;WITH sa_recv AS (
+  SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
+  FROM SuggAlloc
+  ${scope === "global" ? "" : `WHERE OrderItemID IN (${lineIdCsv})`}
+  GROUP BY ReceiveItemID
+)
 WHILE (1=1)
 BEGIN
   ;WITH odx AS (
@@ -442,7 +455,7 @@ BEGIN
       NULLIF(UPPER(LTRIM(RTRIM(od.Qualifier))),'')   AS Qual_N,
       TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum
     FROM OrderDetails od
-    WHERE od.OrderItemID IN (${lineIds.join(",")})
+    WHERE od.OrderItemID IN (${lineIdCsv})
   ),
   x AS (
     SELECT
@@ -468,13 +481,9 @@ BEGIN
       inv.LocationName,
       inv.ReceivedQty,
       inv.AvailableQTY,
-      (inv.AvailableQTY - ISNULL(sa2.AllocOnReceive,0)) AS RemainingAvailable
+      (inv.AvailableQTY - ISNULL(sr.AllocOnReceive,0)) AS RemainingAvailable
     FROM Inventory inv
-    LEFT JOIN (
-      SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
-      FROM SuggAlloc
-      GROUP BY ReceiveItemID
-    ) sa2 ON sa2.ReceiveItemID = inv.ReceiveItemID
+    LEFT JOIN sa_recv sr ON sr.ReceiveItemID = inv.ReceiveItemID
   ),
 
   -- Tier 1: ItemID + Qualifier
@@ -511,7 +520,7 @@ BEGIN
       AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
 
-  -- Tier 3: SKU only (ignore Qualifier) — used only if t1/t2 find nothing
+  -- Tier 3: SKU only (ignore Qualifier) if t1/t2 had no options for this line
   cand_t3 AS (
     SELECT
       x.OrderItemID,
@@ -569,7 +578,7 @@ BEGIN
 END;
     `);
 
-    // Summarize
+    // Summary
     const summary = await pool.request().query(`
       SELECT od.OrderID, od.OrderItemID, od.SKU, od.OrderedQTY,
              ISNULL(x.Alloc,0) AS Allocated,
@@ -579,15 +588,16 @@ END;
         SELECT OrderItemID, SUM(ISNULL(SuggAllocQty,0)) AS Alloc
         FROM SuggAlloc GROUP BY OrderItemID
       ) x ON x.OrderItemID = od.OrderItemID
-      WHERE od.OrderItemID IN (${lineIds.join(",")})
+      WHERE od.OrderItemID IN (${lineIdCsv})
       ORDER BY od.OrderID, od.OrderItemID;
     `);
 
-    res.json({ ok: true, allocated: summary.recordset.length, summary: summary.recordset });
+    res.json({ ok: true, scope, allocated: summary.recordset.length, summary: summary.recordset });
   } catch (e) {
     res.status(500).json({ ok: false, message: e.message });
   }
 });
+
 
 // POST /api/inventory/by-skus
 // body: { skus: string[] }

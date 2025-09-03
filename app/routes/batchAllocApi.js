@@ -364,8 +364,9 @@ r.post("/search-by-batchid", async (req, res) => {
 /* ----------------------- POST /api/batch/allocate -----------------------
 body: { orderIds: number[] }
 Runs allocator across all lines belonging to those orders.
-- Backfills OrderDetails.ItemID from Inventory by (SKU, Qualifier) if missing
-- Matches inventory by ItemID OR (SKU when ItemID is 0)
+- NO hard casts on OrderDetails.ItemID (it can be varchar like 'VX-177-PK')
+- Safely derives ItemIDNum = TRY_CONVERT(INT, od.ItemID)
+- Uses ItemIDNum branch first; falls back to SKU branch when ItemIDNum is NULL
 ----------------------------------------------------------------------- */
 r.post("/allocate", async (req, res) => {
   try {
@@ -378,58 +379,52 @@ r.post("/allocate", async (req, res) => {
 
     const pool = await getPool();
 
-    // 0) Ensure we have OrderDetails rows for these orders
+    // Resolve line IDs for those orders
     const idQuery = await pool.request().query(`
       SELECT OrderItemID
       FROM OrderDetails
       WHERE OrderID IN (${orderIds.join(",")})
     `);
-    const lineIds = idQuery.recordset.map((r) => r.OrderItemID);
+    const lineIds = idQuery.recordset.map(r => r.OrderItemID);
     if (!lineIds.length) return res.json({ ok: true, allocated: 0, summary: [] });
 
-    // 1) Backfill ItemID using Inventory by (SKU, Qualifier) when ItemID is NULL/0
-    //    This makes the ItemID join sargable and helps the allocator find inventory.
-    await pool.request().query(`
-      UPDATE od
-      SET od.ItemID = inv.ItemID
-      FROM OrderDetails od
-      JOIN Inventory inv
-        ON inv.SKU = od.SKU
-       AND (inv.Qualifier = od.Qualifier OR (inv.Qualifier IS NULL AND od.Qualifier IS NULL))
-      WHERE od.OrderID IN (${orderIds.join(",")})
-        AND (od.ItemID IS NULL OR od.ItemID = 0)
-        AND inv.ItemID IS NOT NULL
-    `);
+    // Clear SuggAlloc for these lines (idempotent runs)
+    await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
 
-    // 2) Clear existing SuggAlloc for these lines (optional, but keeps things idempotent)
-    await pool.request().query(`
-      DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});
-    `);
-
-    // 3) Allocation loop:
-    //    Build candidate inventory using two branches:
-    //     - Branch A: ItemID match (preferred)
-    //     - Branch B: SKU match when ItemID is 0/NULL
+    // Allocation loop using safe ItemID conversion
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
 
 WHILE (1=1)
 BEGIN
-  ;WITH x AS (
+  ;WITH odx AS (
     SELECT
       od.OrderItemID,
       od.OrderedQTY,
-      ISNULL(sa.SumSuggAllocQty,0) AS SumSuggAllocQty,
-      (od.OrderedQTY - ISNULL(sa.SumSuggAllocQty,0)) AS RemainingOpenQty
+      od.SKU,
+      od.Qualifier,
+      TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum
     FROM OrderDetails od
+    WHERE od.OrderItemID IN (${lineIds.join(",")})
+  ),
+  x AS (
+    SELECT
+      o.OrderItemID,
+      o.OrderedQTY,
+      ISNULL(sa.SumSuggAllocQty,0) AS SumSuggAllocQty,
+      (o.OrderedQTY - ISNULL(sa.SumSuggAllocQty,0)) AS RemainingOpenQty,
+      o.SKU,
+      o.Qualifier,
+      o.ItemIDNum
+    FROM odx o
     LEFT JOIN (
       SELECT OrderItemID, SUM(ISNULL(SuggAllocQty,0)) AS SumSuggAllocQty
       FROM SuggAlloc GROUP BY OrderItemID
-    ) sa ON sa.OrderItemID = od.OrderItemID
-    WHERE od.OrderItemID IN (${lineIds.join(",")})
+    ) sa ON sa.OrderItemID = o.OrderItemID
   ),
-  cand_itemid AS (  -- preferred path: ItemID match
+  -- Preferred: numeric ItemID match
+  cand_itemid AS (
     SELECT
       x.OrderItemID,
       x.OrderedQTY,
@@ -449,20 +444,19 @@ BEGIN
         WHEN SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty <= inv.AvailableQTY THEN 7
         WHEN SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty <= inv.AvailableQTY THEN 8
       END AS Seq,
-      1 AS Priority -- ItemID match has higher priority
+      1 AS Priority
     FROM x
-    JOIN OrderDetails od ON od.OrderItemID = x.OrderItemID
     JOIN Inventory inv
-      ON inv.ItemID = od.ItemID
-     AND (inv.Qualifier = od.Qualifier OR (inv.Qualifier IS NULL AND od.Qualifier IS NULL))
+      ON inv.ItemID = x.ItemIDNum
+     AND (inv.Qualifier = x.Qualifier OR (inv.Qualifier IS NULL AND x.Qualifier IS NULL))
     WHERE
       x.RemainingOpenQty > 0
-      AND od.ItemID IS NOT NULL
-      AND od.ItemID <> 0
+      AND x.ItemIDNum IS NOT NULL
       AND inv.AvailableQTY > 0
       AND inv.ReceiveItemID NOT IN (SELECT DISTINCT ReceiveItemID FROM SuggAlloc)
   ),
-  cand_sku AS (  -- fallback path: SKU match when ItemID is missing
+  -- Fallback: SKU match when ItemIDNum is NULL (varchar ItemID or blank)
+  cand_sku AS (
     SELECT
       x.OrderItemID,
       x.OrderedQTY,
@@ -482,15 +476,14 @@ BEGIN
         WHEN SUBSTRING(inv.LocationName,4,1)='A'  AND x.RemainingOpenQty <= inv.AvailableQTY THEN 7
         WHEN SUBSTRING(inv.LocationName,4,1)<>'A' AND x.RemainingOpenQty <= inv.AvailableQTY THEN 8
       END AS Seq,
-      2 AS Priority -- fallback
+      2 AS Priority
     FROM x
-    JOIN OrderDetails od ON od.OrderItemID = x.OrderItemID
     JOIN Inventory inv
-      ON inv.SKU = od.SKU
-     AND (inv.Qualifier = od.Qualifier OR (inv.Qualifier IS NULL AND od.Qualifier IS NULL))
+      ON inv.SKU = x.SKU
+     AND (inv.Qualifier = x.Qualifier OR (inv.Qualifier IS NULL AND x.Qualifier IS NULL))
     WHERE
       x.RemainingOpenQty > 0
-      AND (od.ItemID IS NULL OR od.ItemID = 0)
+      AND x.ItemIDNum IS NULL
       AND inv.AvailableQTY > 0
       AND inv.ReceiveItemID NOT IN (SELECT DISTINCT ReceiveItemID FROM SuggAlloc)
   ),
@@ -510,7 +503,7 @@ BEGIN
     FROM cand c
     ORDER BY
       c.OrderItemID,
-      c.Priority ASC,    -- prefer ItemID branch
+      c.Priority ASC,    -- prefer ItemID match
       c.Seq ASC,
       CASE
         WHEN c.Seq IN (1,2,3,4,5,6) THEN c.AvailableQTY + 0
@@ -527,17 +520,36 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1
-    FROM OrderDetails od
+    FROM odx o
     OUTER APPLY (
       SELECT SUM(ISNULL(sa.SuggAllocQty,0)) AS SumSuggAllocQty
-      FROM SuggAlloc sa WHERE sa.OrderItemID = od.OrderItemID
+      FROM SuggAlloc sa WHERE sa.OrderItemID = o.OrderItemID
     ) z
-    WHERE od.OrderItemID IN (${lineIds.join(",")})
-      AND (od.OrderedQTY - ISNULL(z.SumSuggAllocQty,0)) > 0
+    WHERE (o.OrderedQTY - ISNULL(z.SumSuggAllocQty,0)) > 0
   )
     BREAK;
 END;
     `);
+
+    const summary = await pool.request().query(`
+      SELECT od.OrderID, od.OrderItemID, od.SKU, od.OrderedQTY,
+             ISNULL(x.Alloc,0) AS Allocated,
+             (od.OrderedQTY - ISNULL(x.Alloc,0)) AS Remaining
+      FROM OrderDetails od
+      LEFT JOIN (
+        SELECT OrderItemID, SUM(ISNULL(SuggAllocQty,0)) AS Alloc
+        FROM SuggAlloc GROUP BY OrderItemID
+      ) x ON x.OrderItemID = od.OrderItemID
+      WHERE od.OrderItemID IN (${lineIds.join(",")})
+      ORDER BY od.OrderID, od.OrderItemID;
+    `);
+
+    res.json({ ok: true, allocated: summary.recordset.length, summary: summary.recordset });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 
     // 4) Return summary
     const summary = await pool.request().query(`

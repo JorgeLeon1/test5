@@ -394,16 +394,19 @@ r.post("/search-by-ids", async (req, res) => {
 
 /* ----------------------- POST /api/batch/allocate -----------------------
 body: { orderIds: number[] }
-Allocator:
-- Safely parses ItemID with TRY_CONVERT (so 'VX-177-PK' won't error)
-- Normalizes Qualifier (NULL vs '' vs spaces)
-- Finds candidates by ItemID (preferred) or SKU (fallback)
-- Uses RemainingAvailable per ReceiveItemID to avoid over/under allocation
+Allocator (progressive match):
+  T1: ItemID (numeric) + Qualifier  → preferred
+  T2: SKU + Qualifier               → fallback
+  T3: SKU (ignore Qualifier)        → last resort
+All comparisons use normalized fields:
+  - SKU_N = UPPER(TRIM(SKU))
+  - Qual_N = NULL when blank; else UPPER(TRIM(qual))
+RemainingAvailable = AvailableQTY - SUM(SuggAlloc on that ReceiveItemID)
 ----------------------------------------------------------------------- */
 r.post("/allocate", async (req, res) => {
   try {
     const orderIds = Array.isArray(req.body?.orderIds)
-      ? req.body.orderIds.map((n) => toInt(n)).filter(Boolean)
+      ? req.body.orderIds.map((n) => (Number.isFinite(Number(n)) ? Math.trunc(Number(n)) : 0)).filter(Boolean)
       : [];
     if (!orderIds.length) {
       return res.status(400).json({ ok: false, message: "orderIds required" });
@@ -411,21 +414,19 @@ r.post("/allocate", async (req, res) => {
 
     const pool = await getPool();
 
-    // Resolve selected line IDs
+    // Collect selected lines
     const idQuery = await pool.request().query(`
       SELECT OrderItemID
       FROM OrderDetails
       WHERE OrderID IN (${orderIds.join(",")})
     `);
-    const lineIds = idQuery.recordset.map((r) => r.OrderItemID);
+    const lineIds = idQuery.recordset.map(r => r.OrderItemID);
     if (!lineIds.length) return res.json({ ok: true, allocated: 0, summary: [] });
 
-    // Clear existing SuggAlloc for these lines (idempotent run)
-    await pool.request().query(`
-      DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});
-    `);
+    // Clear existing SuggAlloc for idempotent run
+    await pool.request().query(`DELETE SuggAlloc WHERE OrderItemID IN (${lineIds.join(",")});`);
 
-    // Allocation loop
+    // Progressive allocation loop
     await pool.request().batch(`
 DECLARE @iters INT = 0;
 DECLARE @maxIters INT = 20000;
@@ -436,8 +437,8 @@ BEGIN
     SELECT
       od.OrderItemID,
       od.OrderedQTY,
-      od.SKU,
-      NULLIF(LTRIM(RTRIM(od.Qualifier)),'') AS QualNorm,
+      UPPER(LTRIM(RTRIM(od.SKU)))                    AS SKU_N,
+      NULLIF(UPPER(LTRIM(RTRIM(od.Qualifier))),'')   AS Qual_N,
       TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(CAST(od.ItemID AS VARCHAR(64)))), '')) AS ItemIDNum
     FROM OrderDetails od
     WHERE od.OrderItemID IN (${lineIds.join(",")})
@@ -446,8 +447,8 @@ BEGIN
     SELECT
       o.OrderItemID,
       o.OrderedQTY,
-      o.SKU,
-      o.QualNorm,
+      o.SKU_N,
+      o.Qual_N,
       o.ItemIDNum,
       ISNULL(sa.SumSuggAllocQty,0) AS SumSuggAllocQty,
       (o.OrderedQTY - ISNULL(sa.SumSuggAllocQty,0)) AS RemainingOpenQty
@@ -461,8 +462,8 @@ BEGIN
     SELECT
       inv.ReceiveItemID,
       inv.ItemID,
-      inv.SKU,
-      NULLIF(LTRIM(RTRIM(inv.Qualifier)),'') AS QualNorm,
+      UPPER(LTRIM(RTRIM(inv.SKU)))                  AS SKU_N,
+      NULLIF(UPPER(LTRIM(RTRIM(inv.Qualifier))),'') AS Qual_N,
       inv.LocationName,
       inv.ReceivedQty,
       inv.AvailableQTY,
@@ -470,10 +471,13 @@ BEGIN
     FROM Inventory inv
     LEFT JOIN (
       SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
-      FROM SuggAlloc GROUP BY ReceiveItemID
+      FROM SuggAlloc
+      GROUP BY ReceiveItemID
     ) sa2 ON sa2.ReceiveItemID = inv.ReceiveItemID
   ),
-  cand_itemid AS (
+
+  -- Tier 1: ItemID + Qualifier
+  cand_t1 AS (
     SELECT
       x.OrderItemID,
       x.RemainingOpenQty,
@@ -483,12 +487,14 @@ BEGIN
     FROM x
     JOIN invx ivx
       ON ivx.ItemID = x.ItemIDNum
-     AND (ivx.QualNorm = x.QualNorm OR (ivx.QualNorm IS NULL AND x.QualNorm IS NULL))
+     AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
     WHERE x.RemainingOpenQty > 0
       AND x.ItemIDNum IS NOT NULL
       AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
-  cand_sku AS (
+
+  -- Tier 2: SKU + Qualifier
+  cand_t2 AS (
     SELECT
       x.OrderItemID,
       x.RemainingOpenQty,
@@ -497,32 +503,50 @@ BEGIN
       2 AS Priority
     FROM x
     JOIN invx ivx
-      ON ivx.SKU = x.SKU
-     AND (ivx.QualNorm = x.QualNorm OR (ivx.QualNorm IS NULL AND x.QualNorm IS NULL))
+      ON ivx.SKU_N = x.SKU_N
+     AND ((ivx.Qual_N = x.Qual_N) OR (ivx.Qual_N IS NULL AND x.Qual_N IS NULL))
     WHERE x.RemainingOpenQty > 0
       AND x.ItemIDNum IS NULL
       AND ISNULL(ivx.RemainingAvailable,0) > 0
   ),
-  cand AS (
-    SELECT * FROM cand_itemid
-    UNION ALL
-    SELECT * FROM cand_sku
+
+  -- Tier 3: SKU only (ignore Qualifier) — used only if t1/t2 find nothing
+  cand_t3 AS (
+    SELECT
+      x.OrderItemID,
+      x.RemainingOpenQty,
+      ivx.ReceiveItemID,
+      ivx.RemainingAvailable,
+      3 AS Priority
+    FROM x
+    JOIN invx ivx
+      ON ivx.SKU_N = x.SKU_N
+    WHERE x.RemainingOpenQty > 0
+      AND ISNULL(ivx.RemainingAvailable,0) > 0
+      AND NOT EXISTS (SELECT 1 FROM cand_t1 t1 WHERE t1.OrderItemID = x.OrderItemID)
+      AND NOT EXISTS (SELECT 1 FROM cand_t2 t2 WHERE t2.OrderItemID = x.OrderItemID)
   ),
+
+  cand AS (
+    SELECT * FROM cand_t1
+    UNION ALL
+    SELECT * FROM cand_t2
+    UNION ALL
+    SELECT * FROM cand_t3
+  ),
+
   pick AS (
     SELECT TOP (1)
       c.OrderItemID,
       c.ReceiveItemID,
       CASE WHEN c.RemainingOpenQty >= c.RemainingAvailable
            THEN c.RemainingAvailable
-           ELSE c.RemainingOpenQty
-      END AS AllocQty,
+           ELSE c.RemainingOpenQty END AS AllocQty,
       c.Priority
     FROM cand c
-    ORDER BY
-      c.OrderItemID,
-      c.Priority ASC,          -- prefer ItemID match
-      c.RemainingAvailable DESC
+    ORDER BY c.OrderItemID, c.Priority ASC, c.RemainingAvailable DESC
   )
+
   INSERT INTO SuggAlloc (OrderItemID, ReceiveItemID, SuggAllocQty)
   SELECT OrderItemID, ReceiveItemID, AllocQty FROM pick;
 
@@ -544,7 +568,7 @@ BEGIN
 END;
     `);
 
-    // Summary
+    // Summarize
     const summary = await pool.request().query(`
       SELECT od.OrderID, od.OrderItemID, od.SKU, od.OrderedQTY,
              ISNULL(x.Alloc,0) AS Allocated,
@@ -563,6 +587,7 @@ END;
     res.status(500).json({ ok: false, message: e.message });
   }
 });
+
 
 /* ----------------------- POST /api/batch/push -----------------------
 body: { orderIds: number[], forceMethod?: "auto"|"put"|"post" }

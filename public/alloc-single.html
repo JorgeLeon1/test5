@@ -21,7 +21,7 @@
     button.secondary { background:var(--blue); }
     button.muted { background:var(--gray); }
     button:disabled { opacity:.6; cursor:not-allowed; }
-    input[type="text"], input[type="datetime-local"], select { width:100%; max-width:280px; padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; }
+    input[type="text"], select { width:100%; max-width:280px; padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; }
     table { width:100%; border-collapse:collapse; }
     th, td { padding:8px 10px; border-bottom:1px solid #eef2f7; text-align:left; }
     thead { background:#f3f4f6; }
@@ -121,7 +121,7 @@
         <h2>Batch Search</h2>
         <div class="body">
           <div class="toolbar">
-            <input id="batchSince" type="datetime-local"/>
+            <!-- removed datetime filter to avoid time-based searches by default -->
             <select id="batchStatus">
               <option value="">Any Status</option>
               <option value="AWAITINGPICK">AWAITINGPICK</option>
@@ -226,7 +226,8 @@
 
       // load inventory & current suggestions (optional endpoints, ignore if 404)
       try {
-        const inv = await fetchJSON(`/api/inventory/by-skus`, { method:'POST', body: JSON.stringify({ skus:[...(new Set((data.lines||[]).map(x=>x.SKU).filter(Boolean)))] }) });
+        const skus = [...new Set((data.lines||[]).map(x=>x.SKU).filter(Boolean))];
+        const inv = await fetchJSON(`/api/inventory/by-skus`, { method:'POST', body: JSON.stringify({ skus }) });
         invBody.innerHTML = '';
         (inv.items || []).forEach(x => {
           const tr = document.createElement('tr');
@@ -291,7 +292,7 @@
       if (!ids.length) return;
       try {
         setStatus(singleStatus, 'Allocating in SQL…');
-        const data = await fetchJSON('/api/single-alloc/allocate', {
+        await fetchJSON('/api/single-alloc/allocate', {
           method:'POST',
           body: JSON.stringify({ orderId: currentOrderId, lineIds: ids })
         });
@@ -351,24 +352,32 @@
     btnBatchSearch.addEventListener('click', async () => {
       try {
         setStatus(batchStatusMsg, 'Searching…');
-        const payload = {
-          modifiedSince: $('#batchSince').value || null,
-          status: $('#batchStatus').value || null,
-          maxOrders: parseInt($('#batchMax').value || '0', 10) || null
-        };
-        const data = await fetchJSON('/api/batch-alloc/search', { method:'POST', body: JSON.stringify(payload) });
+
+        const status = $('#batchStatus').value || '';
+        const maxOrders = parseInt($('#batchMax').value || '0', 10) || 0;
+
+        // Build query params — NO time filter by default
+        const qs = new URLSearchParams();
+        if (status) qs.set('status', status);
+        if (maxOrders) {
+          qs.set('pageSize', Math.min(maxOrders, 500));
+          qs.set('maxPages', 1);
+        }
+
+        const data = await fetchJSON(`/api/batch/search?${qs.toString()}`, { method: 'GET' });
 
         batchBody.innerHTML = '';
         if (!data.orders?.length) {
           batchBody.innerHTML = '<tr><td colspan="4" class="muted">No orders found.</td></tr>';
         } else {
           data.orders.forEach(o => {
+            const openLines = (o.lineCount ?? o.openLines ?? '');
             const tr = document.createElement('tr');
             tr.innerHTML = `
               <td><input type="checkbox" class="bo" data-id="${o.orderId}"/></td>
               <td>${o.orderId}</td>
               <td>${o.customerName || ''}</td>
-              <td><span class="pill">${o.openLines ?? ''}</span></td>
+              <td><span class="pill">${openLines}</span></td>
             `;
             batchBody.appendChild(tr);
           });
@@ -396,8 +405,8 @@
       if (!confirm(`Run SQL allocation for ${orderIds.length} orders?`)) return;
       try {
         setStatus(batchStatusMsg, 'Allocating (batch)…');
-        const data = await fetchJSON('/api/batch-alloc/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
-        setStatus(batchStatusMsg, `Allocated ${data.linesAffected ?? 'some'} lines.`, 'ok');
+        const data = await fetchJSON('/api/batch/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
+        setStatus(batchStatusMsg, `Allocation request sent for ${orderIds.length} orders.`, 'ok');
       } catch (e) {
         console.error(e);
         setStatus(batchStatusMsg, e.message || 'Batch allocation failed', 'err');
@@ -410,8 +419,8 @@
       if (!confirm(`Push allocations for ${orderIds.length} orders to Extensiv?`)) return;
       try {
         setStatus(batchStatusMsg, 'Pushing (batch)…');
-        const data = await fetchJSON('/api/batch-alloc/push', { method:'POST', body: JSON.stringify({ orderIds }) });
-        setStatus(batchStatusMsg, `Batch push OK. Sent ${data.sent ?? 0}.`, 'ok');
+        const data = await fetchJSON('/api/batch/push', { method:'POST', body: JSON.stringify({ orderIds }) });
+        setStatus(batchStatusMsg, `Batch push sent for ${orderIds.length} orders.`, 'ok');
       } catch (e) {
         console.error(e);
         setStatus(batchStatusMsg, e.data?.message || e.message || 'Batch push failed', 'err');

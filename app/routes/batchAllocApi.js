@@ -24,6 +24,7 @@ function firstArray(obj) {
   return [];
 }
 
+
 /** Get items/lines from an order across shapes */
 function itemsFromOrder(ord) {
   const em = ord?._embedded;
@@ -588,6 +589,44 @@ END;
   }
 });
 
+// POST /api/inventory/by-skus
+// body: { skus: string[] }
+r.post("/inventory/by-skus", async (req, res) => {
+  try {
+    const skus = Array.isArray(req.body?.skus) ? req.body.skus : [];
+    if (!skus.length) return res.json({ ok:true, items: [] });
+
+    // Normalize to uppercase/trim for display parity with allocator
+    const skuList = skus.map(s => `'${String(s).trim().toUpperCase().replace(/'/g, "''")}'`).join(",");
+
+    const pool = await getPool();
+    const rows = await pool.request().query(`
+      WITH invx AS (
+        SELECT
+          inv.SKU,
+          NULLIF(UPPER(LTRIM(RTRIM(inv.Qualifier))),'') AS Qualifier,
+          inv.ReceiveItemID,
+          inv.ReceivedQty,
+          inv.AvailableQTY,
+          inv.LocationName,
+          (inv.AvailableQTY - ISNULL(sa.AllocOnReceive,0)) AS RemainingAvailable
+        FROM Inventory inv
+        LEFT JOIN (
+          SELECT ReceiveItemID, SUM(ISNULL(SuggAllocQty,0)) AS AllocOnReceive
+          FROM SuggAlloc GROUP BY ReceiveItemID
+        ) sa ON sa.ReceiveItemID = inv.ReceiveItemID
+        WHERE UPPER(LTRIM(RTRIM(inv.SKU))) IN (${skuList})
+      )
+      SELECT SKU, Qualifier, ReceiveItemID, ReceivedQty, AvailableQTY, RemainingAvailable, LocationName
+      FROM invx
+      ORDER BY SKU, RemainingAvailable DESC;
+    `);
+
+    res.json({ ok:true, items: rows.recordset });
+  } catch (e) {
+    res.status(500).json({ ok:false, message: e.message });
+  }
+});
 
 /* ----------------------- POST /api/batch/push -----------------------
 body: { orderIds: number[], forceMethod?: "auto"|"put"|"post" }

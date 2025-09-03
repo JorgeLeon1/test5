@@ -133,8 +133,17 @@
             <div style="display:flex; flex-direction:column; gap:6px; max-width:520px;">
               <label class="muted" for="batchIds">Specific Order IDs (comma, space, or new lines)</label>
               <textarea id="batchIds" placeholder="e.g. 208136, 208140 208141&#10;208150"></textarea>
-              <div style="display:flex; gap:8px;">
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <button id="btnLoadIds">Load by Order IDs</button>
+
+                <!-- NEW: push method selector -->
+                <label class="muted" for="pushMethod" style="margin-left:8px;">Push method</label>
+                <select id="pushMethod" title="Push method" style="max-width:140px;">
+                  <option value="auto" selected>Auto</option>
+                  <option value="put">PUT</option>
+                  <option value="post">POST</option>
+                </select>
+
                 <button id="btnBatchAlloc" disabled>Run SQL Allocation (batch)</button>
                 <button class="muted" id="btnBatchPush" disabled>Push Batch to Extensiv</button>
               </div>
@@ -154,6 +163,8 @@
               <tr><td colspan="4" class="muted">Load a Batch ID or enter Order IDs to see orders.</td></tr>
             </tbody>
           </table>
+
+          <div id="batchAllocSummary" class="status"></div>
         </div>
       </div>
     </section>
@@ -201,7 +212,6 @@
     const singleStatus = $('#singleStatus');
     const linesTbody = $('#linesTbody');
     const suggBody = $('#suggBody');
-    const suggTally = $('#suggTally');
     const invBody = $('#invBody');
     const invNote = $('#invNote');
     const chkAllLines = $('#chkAllLines');
@@ -259,7 +269,6 @@
             suggBody.appendChild(tr);
           });
         }
-        suggTally.textContent = '';
       } catch {
         suggBody.innerHTML = '<tr><td colspan="3" class="muted">No suggestion endpoint or no data.</td></tr>';
       }
@@ -329,11 +338,13 @@
       if (!confirm(`Push SuggAlloc for Order #${currentOrderId} to Extensiv?`)) return;
       try {
         setStatus(singleStatus, 'Pushing to Extensiv…');
-        const data = await fetchJSON('/api/single-alloc/push', {
+        // Use global method selector if present
+        const forceMethod = (document.getElementById('pushMethod')?.value || 'auto').toLowerCase();
+        const data = await fetchJSON('/api/batch/push', {
           method:'POST',
-          body: JSON.stringify({ orderId: currentOrderId })
+          body: JSON.stringify({ orderIds: [currentOrderId], forceMethod })
         });
-        setStatus(singleStatus, `Push OK (status ${data.status})`, 'ok');
+        setStatus(singleStatus, `Push returned: ${data?.results?.[0]?.status ?? 'n/a'}`, data?.results?.[0]?.ok ? 'ok' : 'err');
       } catch (e) {
         console.error(e);
         setStatus(singleStatus, e.data?.message || e.message || 'Push failed', 'err');
@@ -389,7 +400,12 @@
           method:'POST', body: JSON.stringify({ batchId: parseInt(val,10), pageSize: 500, maxPages: 10 })
         });
         renderBatchTable(data.orders);
-        setStatus(batchStatusMsg, `Loaded ${data.orders?.length || 0} order(s) from batch ${val}.`, 'ok');
+        if ((data.orders?.length || 0) === 0) {
+          const diag = (data.diagnostics?.tried || []).map(t => `${t.rql} → ${t.status} (keys: ${t.sampleKeys?.join(", ") || "n/a"})`).join(" | ");
+          setStatus(batchStatusMsg, `0 orders. Tried: ${diag}`, 'err');
+        } else {
+          setStatus(batchStatusMsg, `Loaded ${data.orders?.length || 0} order(s) from batch ${val}. ${data.usedRql ? `RQL: ${data.usedRql}` : ''}`, 'ok');
+        }
       } catch (e) {
         console.error(e);
         setStatus(batchStatusMsg, e.message || 'Batch load failed', 'err');
@@ -406,6 +422,7 @@
         if (!ids.length) {
           setStatus(batchStatusMsg, 'Enter at least one numeric Order ID.', 'err'); return;
         }
+        // You can reuse /api/batch/search if you’ve built a by-ids route. For now, assume you have it:
         const data = await fetchJSON('/api/batch/search-by-ids', {
           method:'POST', body: JSON.stringify({ orderIds: ids })
         });
@@ -431,8 +448,67 @@
       if (!confirm(`Run SQL allocation for ${orderIds.length} orders?`)) return;
       try {
         setStatus(batchStatusMsg, 'Allocating (batch)…');
-        await fetchJSON('/api/batch/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
-        setStatus(batchStatusMsg, `Allocation request sent for ${orderIds.length} orders.`, 'ok');
+        const data = await fetchJSON('/api/batch/allocate', { method:'POST', body: JSON.stringify({ orderIds }) });
+
+        // Render summary
+        const sumDiv = document.getElementById('batchAllocSummary');
+        if (Array.isArray(data.summary) && data.summary.length) {
+          const byOrder = new Map();
+          for (const r of data.summary) {
+            const key = r.OrderID;
+            if (!byOrder.has(key)) byOrder.set(key, []);
+            byOrder.get(key).push(r);
+          }
+          let html = '<div style="margin-top:8px;"><b>Allocation Summary</b></div>';
+          byOrder.forEach((rows, oid) => {
+            const totals = rows.reduce((a, r) => {
+              a.ordered += (r.OrderedQTY || 0);
+              a.allocated += (r.Allocated || 0);
+              a.remaining += (r.Remaining || 0);
+              return a;
+            }, { ordered:0, allocated:0, remaining:0 });
+
+            html += `
+              <div style="margin-top:6px;">
+                <div><b>Order #${oid}</b></div>
+                <table style="width:auto; border-collapse:collapse; margin-top:4px;">
+                  <thead>
+                    <tr>
+                      <th style="padding:4px 8px; border-bottom:1px solid #eef2f7;">SKU</th>
+                      <th style="padding:4px 8px; border-bottom:1px solid #eef2f7;">Ordered</th>
+                      <th style="padding:4px 8px; border-bottom:1px solid #eef2f7;">Allocated</th>
+                      <th style="padding:4px 8px; border-bottom:1px solid #eef2f7;">Remaining</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rows.map(r => `
+                      <tr>
+                        <td style="padding:4px 8px; border-bottom:1px solid #f5f6fa;">${r.SKU || ''}</td>
+                        <td style="padding:4px 8px; border-bottom:1px solid #f5f6fa;">${r.OrderedQTY ?? ''}</td>
+                        <td style="padding:4px 8px; border-bottom:1px solid #f5f6fa;">${r.Allocated ?? 0}</td>
+                        <td style="padding:4px 8px; border-bottom:1px solid #f5f6fa;">${r.Remaining ?? ''}</td>
+                      </tr>
+                    `).join('')}
+                    <tr>
+                      <td style="padding:6px 8px; font-weight:600;">Totals</td>
+                      <td style="padding:6px 8px; font-weight:600;">${totals.ordered}</td>
+                      <td style="padding:6px 8px; font-weight:600;">${totals.allocated}</td>
+                      <td style="padding:6px 8px; font-weight:600;">${totals.remaining}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            `;
+          });
+          sumDiv.className = 'status ok';
+          sumDiv.innerHTML = html;
+        } else {
+          const sumDiv = document.getElementById('batchAllocSummary');
+          sumDiv.className = 'status';
+          sumDiv.textContent = 'No summary rows returned.';
+        }
+
+        setStatus(batchStatusMsg, `Allocation complete for ${orderIds.length} orders.`, 'ok');
       } catch (e) {
         console.error(e);
         setStatus(batchStatusMsg, e.message || 'Batch allocation failed', 'err');
@@ -443,10 +519,47 @@
       const orderIds = getSelectedOrders();
       if (!orderIds.length) return;
       if (!confirm(`Push allocations for ${orderIds.length} orders to Extensiv?`)) return;
+
       try {
         setStatus(batchStatusMsg, 'Pushing (batch)…');
-        await fetchJSON('/api/batch/push', { method:'POST', body: JSON.stringify({ orderIds }) });
-        setStatus(batchStatusMsg, `Batch push sent for ${orderIds.length} orders.`, 'ok');
+
+        const forceMethod = (document.getElementById('pushMethod')?.value || 'auto').toLowerCase();
+        const data = await fetchJSON('/api/batch/push', {
+          method:'POST',
+          body: JSON.stringify({ orderIds, forceMethod })
+        });
+
+        if (Array.isArray(data.results)) {
+          const rows = data.results.map(r => `
+            <tr>
+              <td>${r.orderId}</td>
+              <td>${r.sentAllocations}</td>
+              <td>${r.status}${r.triedFallback ? ` (fallback)` : ''}${r.forcedMethod ? ` [${r.forcedMethod}]` : ''}</td>
+              <td>${r.ok ? '✅' : '⚠️'}</td>
+              <td>${(r.responseSummary || '').replace(/</g,'&lt;')}</td>
+            </tr>
+          `).join('');
+          const html = `
+            <div style="margin-top:8px;">
+              <b>Push Results</b>
+              <table style="width:100%; border-collapse:collapse; margin-top:6px;">
+                <thead><tr>
+                  <th style="text-align:left; padding:4px 6px;">Order</th>
+                  <th style="text-align:left; padding:4px 6px;">Lines Sent</th>
+                  <th style="text-align:left; padding:4px 6px;">HTTP</th>
+                  <th style="text-align:left; padding:4px 6px;">OK?</th>
+                  <th style="text-align:left; padding:4px 6px;">Summary</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+              ${data.hint ? `<div class="status err" style="margin-top:6px;">${data.hint}</div>` : ''}
+            </div>`;
+          const sumDiv = document.getElementById('batchAllocSummary');
+          sumDiv.className = 'status';
+          sumDiv.innerHTML = html;
+        }
+
+        setStatus(batchStatusMsg, `Push finished for ${orderIds.length} orders.`, 'ok');
       } catch (e) {
         console.error(e);
         setStatus(batchStatusMsg, e.data?.message || e.message || 'Batch push failed', 'err');

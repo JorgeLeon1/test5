@@ -107,7 +107,7 @@ r.get("/token", async (_req, res, next) => {
 /* -------------------------------- PEEK --------------------------------- */
 r.get("/peek", async (_req, res, next) => {
   try {
-    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://box.secure-wms.com");
+    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com");
     const h = await authHeadersSafe();
     const resp = await axios.get(`${base}/orders`, { headers: h, timeout: 15000 });
     const data = resp.data;
@@ -134,8 +134,7 @@ r.get("/peekOrder", async (req, res, next) => {
       return res.json({ ok: true, orderId: id, payload });
     }
 
-    // fallback if helper not present
-    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://box.secure-wms.com");
+    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com");
     const headers = await authHeadersSafe();
     const { data } = await axios.get(`${base}/orders`, {
       headers,
@@ -173,7 +172,7 @@ r.get("/selftest", async (_req, res) => {
     const headers = await authHeadersSafe();
     out.steps.auth = "ok";
 
-    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://box.secure-wms.com");
+    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com");
     const o = await axios.get(`${base}/orders`, { headers, timeout: 15000 });
     const list = firstArray(o.data);
     out.steps.orders = { status: o.status, count: list.length };
@@ -184,7 +183,6 @@ r.get("/selftest", async (_req, res) => {
     await pool.request().query("SELECT 1 as ok");
     out.steps.db = "connect-ok";
 
-    // minimal table create for connectivity check
     await pool.request().batch(`
 IF OBJECT_ID('dbo.OrderDetails','U') IS NULL
   CREATE TABLE dbo.OrderDetails (
@@ -217,79 +215,146 @@ IF OBJECT_ID('dbo.OrderDetails','U') IS NULL
   }
 });
 
-/* ----------------------------- OPEN ORDERS API ----------------------------- */
+/* -------------------------- OPEN ORDERS (robust) -------------------------- */
 /** GET /extensiv/open-orders?range=24h|7d|30d
- *  Returns: { orders: [{ orderNumber, account, warehouse, status, createdAt }] }
+ * Returns: { ok, rql, count, orders: [{ orderNumber, account, warehouse, status, createdAt }] }
  */
 r.get("/open-orders", async (req, res, next) => {
   try {
     const range = (req.query.range || "24h").toLowerCase();
     const hours = range === "24h" ? 24 : range === "7d" ? 7 * 24 : 30 * 24;
-    const createdFromIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
-    const base = trimBase(
-      process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://box.secure-wms.com"
-    );
+    // Some tenants reject milliseconds in ISO. Use second precision.
+    const isoNoMs = (d) => new Date(d).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const createdFromIso = isoNoMs(Date.now() - hours * 3600 * 1000);
+
+    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com");
     const headers = await authHeadersSafe();
 
-    // NOTE on RQL/fields:
-    // - Your /peekOrder used readOnly.* fields. Different tenants sometimes expose createDate vs createdDate.
-    // - We try createDate first, then fallback to createdDate.
-    // - If your tenant expects a different name, switch it in the rql below.
-    //
-    // Open orders since createdFromIso:
-    // readOnly.status=='Open';readOnly.createDate=ge=2025-01-01T00:00:00Z
-    //
-    // If `createDate` doesn’t work for you, try `createdDate`.
-    const rqlCreateField = process.env.EXT_RQL_CREATE_FIELD || "readOnly.createDate"; // or "readOnly.createdDate"
-    const rql = `readOnly.status=='Open';${rqlCreateField}=ge=${createdFromIso}`;
+    // Try multiple field names until one works on your tenant
+    const dateFieldsToTry = [
+      process.env.EXT_RQL_CREATE_FIELD, // optional override
+      "readOnly.createdDate",           // common
+      "readOnly.createDate",
+      "readOnly.modifyDate",
+      "createdDate",
+      "createDate",
+    ].filter(Boolean);
 
     const pageSize = 500;
-    let pg = 1;
-    const all = [];
+    let all = [];
+    let usedRql = null;
 
-    while (true) {
+    async function fetchPage(rql, pgnum) {
       const { data } = await axios.get(`${base}/orders`, {
         headers,
-        params: { pgsiz: pageSize, pgnum: pg, rql },
+        params: { pgsiz: pageSize, pgnum, rql },
         timeout: 20000,
       });
-      const list = firstArray(data);
-      all.push(...list);
-      if (list.length < pageSize) break;
-      pg++;
+      return firstArray(data);
     }
 
-    // Normalize to what the frontend expects
-    const mapOrder = (o) => {
-      const ro = o.readOnly || {};
-      return {
-        orderNumber:
-          o.orderNumber ??
-          ro.orderNumber ??
-          o.orderNo ??
-          o.ExternalId ??
-          (o.orderId != null ? String(o.orderId) : ""),
-        account: o.account ?? ro.customerName ?? o.customerName ?? o.CustomerName ?? "",
-        warehouse: o.warehouse ?? ro.warehouseName ?? o.WarehouseCode ?? ro.warehouseCode ?? "",
-        status: o.status ?? ro.status ?? "",
-        createdAt:
+    // Try each date field with status filter
+    for (const field of dateFieldsToTry) {
+      const rql = `readOnly.status=='Open';${field}=ge=${createdFromIso}`;
+      try {
+        let pg = 1;
+        const batch = [];
+        while (true) {
+          const list = await fetchPage(rql, pg);
+          batch.push(...list);
+          if (list.length < pageSize) break;
+          pg++;
+        }
+        all = batch;
+        usedRql = rql;
+        break;
+      } catch (e) {
+        // If this is a 400 "Properties not supported", try next field
+        const hint = String(e.response?.data?.Hint || e.response?.data || "");
+        if (e.response?.status === 400 && /Properties not supported/i.test(hint)) {
+          continue;
+        }
+        throw e; // other errors bubble up
+      }
+    }
+
+    // If every candidate failed, fall back to status only (no date filter)
+    if (!usedRql) {
+      const rql = `readOnly.status=='Open'`;
+      let pg = 1;
+      while (true) {
+        const list = await fetchPage(rql, pg);
+        all.push(...list);
+        if (list.length < pageSize) break;
+        pg++;
+      }
+      usedRql = rql;
+    }
+
+    // Normalize fields for the frontend
+    const orders = all
+      .map((o) => {
+        const ro = o.readOnly || {};
+        const createdRaw =
           o.createdAt ??
-          ro.createDate ??
           ro.createdDate ??
-          o.CreateDate ??
+          ro.createDate ??
+          ro.modifyDate ??
           o.CreatedDate ??
-          null,
-      };
-    };
+          o.CreateDate ??
+          null;
 
-    const orders = all.map(mapOrder).filter((o) => !!o.createdAt);
+        return {
+          orderNumber:
+            o.orderNumber ??
+            ro.orderNumber ??
+            o.orderNo ??
+            (o.orderId != null ? String(o.orderId) : "") ??
+            o.ExternalId ??
+            "",
+          account: o.account ?? ro.customerName ?? o.customerName ?? o.CustomerName ?? "",
+          warehouse: o.warehouse ?? ro.warehouseName ?? ro.warehouseCode ?? o.WarehouseCode ?? "",
+          status: o.status ?? ro.status ?? "",
+          createdAt: createdRaw,
+        };
+      })
+      .filter((o) => !!o.createdAt);
 
-    res.json({ orders });
+    res.json({ ok: true, rql: usedRql, count: orders.length, orders });
   } catch (e) {
     next(e);
   }
 });
 
+/* ------------------------------ FIELD SNIFFER ----------------------------- */
+/** GET /extensiv/_fields
+ * Fetches a single order and returns available keys to help choose correct RQL fields.
+ */
+r.get("/_fields", async (_req, res, next) => {
+  try {
+    const base = trimBase(process.env.EXT_API_BASE || process.env.EXT_BASE_URL || "https://secure-wms.com");
+    const headers = await authHeadersSafe();
+    const { data } = await axios.get(`${base}/orders`, {
+      headers,
+      params: { pgsiz: 1, pgnum: 1 },
+      timeout: 15000,
+    });
+    const list = firstArray(data);
+    const sample = list?.[0] || {};
+    const topKeys = Object.keys(sample).sort();
+    const roKeys = Object.keys(sample.readOnly || {}).sort();
+
+    res.json({
+      ok: true,
+      note: "Use these keys to pick the correct created-date field for your tenant.",
+      topKeys,
+      readOnlyKeys: roKeys,
+      sample: sample, // keep for debugging; remove if too verbose
+    });
+  } catch (e) {
+    next(e);
+  }
+});
 
 export default r;

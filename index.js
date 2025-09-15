@@ -153,6 +153,10 @@ app.get("/alloc-single", isAuthenticated, (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "alloc-single.html"))
 );
 
+app.get("/landing", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "kpi.html"))
+);
+
 /* ------------------------------- API --------------------------------- */
 
 app.get("/googleSpreadsheetorders", isAuthenticated, async (_req, res) => {

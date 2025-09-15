@@ -185,7 +185,7 @@
   </section>
 </div>
 
-<script>
+<script> 
   // === THEME TOGGLE ===
   const root=document.documentElement, themeToggle=document.getElementById('themeToggle');
   const currentTheme=localStorage.getItem('wm-theme')||'dark';
@@ -202,7 +202,6 @@
 
   // Map Extensiv order -> normalized shape
   function mapOrder(o){
-    // Adjust these field names if your API differs:
     const orderNumber = o.orderNumber || o.OrderNumber || o.orderNo || o.externalId;
     const account     = o.account || o.Customer || o.client || o.accountName || '';
     const warehouse   = o.warehouse || o.Warehouse || o.facility || '';
@@ -210,9 +209,10 @@
     return { orderNumber, account, warehouse, createdAt: createdAt ? new Date(createdAt) : null };
   }
 
-  // === BACKEND CALL (expects /api/extensiv/open-orders?range=24h|7d|30d ) ===
+  // === BACKEND CALL (expects /extensiv/open-orders?range=24h|7d|30d ) ===
   async function fetchOpenOrders(range='24h'){
-    const res = await fetch(`/api/extensiv/open-orders?range=${encodeURIComponent(range)}`, { headers:{'Accept':'application/json'} });
+    // CHANGED: point to your mounted router at /extensiv instead of /api/extensiv
+    const res = await fetch(`/extensiv/open-orders?range=${encodeURIComponent(range)}`, { headers:{'Accept':'application/json'} });
     if(!res.ok) throw new Error(`API ${res.status}`);
     const json = await res.json();
     const orders = (json.orders||[]).map(mapOrder).filter(o => o.createdAt instanceof Date && !isNaN(o.createdAt));
@@ -242,7 +242,6 @@
     el('kpiAvgAge').textContent = ages.length ? ageStr(avgAgeMs) : '—';
     el('kpiOldest').textContent = ages.length ? ageStr(oldestMs) : '—';
 
-    // Simple deltas (vs. previous fetch); store last values
     const last = window.__kpi_last || {};
     const delta = (curr, prev)=> prev==null ? '—' : ((curr-prev)>=0?'+':'') + (curr-prev);
     el('kpiOpenDelta').textContent = delta(openCount, last.open);
@@ -258,7 +257,6 @@
   function groupByPeriod(orders, range){
     const hours = pathRangeToHours(range);
     const now = Date.now();
-    // Build bins by hour or day depending on range
     const by = range==='24h' ? 'hour' : 'day';
     const labels = [];
     const map = new Map();
@@ -372,7 +370,6 @@
       renderTable(orders);
     }catch(err){
       console.error('Failed to load open orders:', err);
-      // Minimal graceful fallback
       setKpis([]); renderThroughput('24h', []); renderWarehouseBreakdown([]); renderTable([]);
     }
   }

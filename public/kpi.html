@@ -7,162 +7,333 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --text:#e5e7eb;
-      --accent:#22d3ee; --accent-2:#a78bfa; --success:#34d399; --warn:#f59e0b; --danger:#f87171;
-      --ring:rgba(34,211,238,.35); --card:#0b1220; --border:rgba(148,163,184,.15);
+      --bg: #fafafa;
+      --panel: #ffffff;
+      --text: #1f2937;          /* slate-800 */
+      --muted: #6b7280;         /* gray-500 */
+      --border: #e5e7eb;        /* gray-200 */
+      --brand: #0ea5e9;         /* sky-500 */
+      --brand-600: #0284c7;     /* sky-600 */
+      --positive: #22c55e;      /* green-500 */
+      --negative: #ef4444;      /* red-500 */
+      --warn: #f59e0b;          /* amber-500 */
+      --card: #ffffff;
     }
-    .light {
-      --bg:#f8fafc; --panel:#fff; --muted:#475569; --text:#0f172a;
-      --accent:#0891b2; --accent-2:#6d28d9; --success:#059669; --warn:#b45309; --danger:#b91c1c;
-      --ring:rgba(8,145,178,.25); --card:#fff; --border:rgba(2,6,23,.08);
+
+    /* Optional dark mode via toggle */
+    .theme-dark {
+      --bg: #0b1220;
+      --panel: #0e172a;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --border: #1f2a44;
+      --brand: #38bdf8;
+      --brand-600: #0ea5e9;
+      --card: #0b1220;
     }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
-    a{color:inherit;text-decoration:none}
-    .layout{display:grid;grid-template-columns:280px 1fr;min-height:100vh}
-    .sidebar{background:var(--panel);border-right:1px solid var(--border);padding:24px;position:sticky;top:0;height:100vh}
-    .logo{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.4px}
-    .logo__dot{width:12px;height:12px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 0 20px var(--ring)}
-    .nav{margin-top:28px;display:grid;gap:8px}
-    .nav a{padding:10px 12px;border-radius:10px;border:1px solid transparent;color:var(--muted);display:flex;align-items:center;gap:10px}
-    .nav a.active,.nav a:hover{color:var(--text);border-color:var(--border);background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(0,0,0,.08))}
-    .footer-note{position:absolute;bottom:16px;left:24px;right:24px;color:var(--muted);font-size:12px}
 
-    .content{display:grid;grid-template-rows:auto 1fr}
-    .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);backdrop-filter:blur(8px);position:sticky;top:0;background:color-mix(in oklab,var(--bg),transparent 20%);z-index:10}
-    .topbar .search{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--border);padding:8px 12px;border-radius:12px;width:420px;max-width:60vw}
-    .topbar input{background:transparent;border:0;outline:none;color:var(--text);width:100%}
-    .topbar .actions{display:flex;gap:8px}
-    .btn{border:1px solid var(--border);padding:8px 12px;border-radius:10px;background:var(--panel);color:var(--text);cursor:pointer}
-    .btn:hover{box-shadow:0 0 0 3px var(--ring)}
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family:
+        ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+        "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    a { color: inherit; text-decoration: none; }
 
-    .main{padding:24px;display:grid;gap:18px}
-    .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-    @media (max-width:1200px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
-    @media (max-width:700px){.layout{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.kpi-grid{grid-template-columns:1fr}}
+    /* Layout */
+    .layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 100vh;
+    }
 
-    .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.15)}
-    .card h3{margin:0;font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.25px}
-    .kpi{display:flex;align-items:baseline;justify-content:space-between;margin-top:8px}
-    .kpi .value{font-size:28px;font-weight:800;letter-spacing:.5px}
-    .kpi .delta{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border)}
-    .delta.up{color:var(--success);background:color-mix(in oklab,var(--success),transparent 85%)}
-    .delta.down{color:var(--danger);background:color-mix(in oklab,var(--danger),transparent 88%)}
+    /* Sidebar */
+    .sidebar {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 20px;
+    }
+    .brand {
+      font-weight: 700;
+      font-size: 18px;
+      letter-spacing: .2px;
+    }
+    .brand small {
+      display: block;
+      color: var(--muted);
+      font-weight: 500;
+      margin-top: 2px;
+    }
+    .nav {
+      margin-top: 24px;
+      display: grid;
+      gap: 6px;
+    }
+    .nav a {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      color: var(--text);
+    }
+    .nav a:hover,
+    .nav a.active {
+      background: var(--panel);
+      border-color: var(--border);
+    }
 
-    .panel-grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
-    @media (max-width:1200px){.panel-grid{grid-template-columns:1fr}}
-    .panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
-    .panel-header h2{margin:0;font-size:16px;letter-spacing:.3px}
-    .filters{display:flex;gap:8px;flex-wrap:wrap}
-    .select,.input{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:8px 10px;color:var(--text)}
+    /* Content */
+    .content {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+    }
+    .topbar .left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 8px;
+      width: 420px;
+      max-width: 54vw;
+    }
+    .search input {
+      border: 0;
+      outline: 0;
+      width: 100%;
+      background: transparent;
+      color: var(--text);
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .btn.primary {
+      background: var(--brand);
+      color: #fff;
+      border-color: var(--brand);
+    }
+    .btn:hover { filter: brightness(0.98); }
+    .btn.primary:hover { background: var(--brand-600); }
 
-    table{width:100%;border-collapse:collapse;font-size:14px}
-    th,td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left}
-    th{color:var(--muted);font-weight:600}
-    tr:hover td{background:color-mix(in oklab,var(--panel),transparent 85%)}
-    .badge{border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px}
-    .subtle{color:var(--muted);font-size:12px}
+    .main {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    /* KPI cards */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    @media (max-width: 1200px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 720px)  { .layout { grid-template-columns: 1fr; } .kpi-grid { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .card h3 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .kpi {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+    }
+    .kpi .value { font-size: 26px; font-weight: 800; }
+    .delta {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .delta.up { color: var(--positive); }
+    .delta.down { color: var(--negative); }
+    .delta.warn { color: var(--warn); }
+
+    /* Panels */
+    .panel-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 1200px) { .panel-grid { grid-template-columns: 1fr; } }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .panel-header h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .filters { display: flex; gap: 8px; }
+    .select, .input {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: var(--text);
+    }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    thead th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tbody td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    tbody tr:hover td { background: rgba(2, 6, 23, 0.02); }
+
+    .subtle { color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
 <div id="app" class="layout">
   <aside class="sidebar">
-    <div class="logo">
-      <span class="logo__dot"></span>
-      <div>
-        <div>WestMark Portal</div>
-        <div class="subtle">KPI Dashboards</div>
-      </div>
+    <div class="brand">
+      WestMark Portal
+      <small>KPI Dashboards</small>
     </div>
 
-    <nav class="nav">
-      <a href="/kpi.html" class="active">📊 Dashboards</a>
-      <a href="/alloc-single">📦 Allocations</a>
-      <a href="/reports">🧾 Reports</a>
-      <a href="/account">🔐 Account</a>
+    <nav class="nav" aria-label="Main Navigation">
+      <a href="/kpi.html" class="active">Dashboards</a>
+      <a href="/alloc-single">Allocations</a>
+      <a href="/reports">Reports</a>
+      <a href="/account">Account</a>
     </nav>
-
-    <div class="footer-note">
-      <div>Tip: Use the theme toggle in the top-right.</div>
-    </div>
   </aside>
 
   <section class="content">
     <div class="topbar">
-      <div class="search">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 21L15.8 15.8M18 10.5C18 14.6421 14.6421 18 10.5 18C6.35786 18 3 14.6421 3 10.5C3 6.35786 6.35786 3 10.5 3C14.6421 3 18 6.35786 18 10.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <input id="searchBox" placeholder="Search orders (order #, account, warehouse)…"/>
+      <div class="left">
+        <div class="search" role="search">
+          <input id="searchBox" placeholder="Search orders (order #, account, warehouse)" aria-label="Search orders"/>
+        </div>
       </div>
       <div class="actions">
-        <button class="btn" id="refreshBtn">Refresh</button>
-        <button class="btn" id="themeToggle">Toggle Theme</button>
+        <button class="btn" id="refreshBtn" type="button">Refresh</button>
+        <button class="btn" id="themeToggle" type="button" aria-pressed="false" aria-label="Toggle theme">Theme</button>
       </div>
     </div>
 
     <main class="main">
-      <!-- KPI CARDS (live from Extensiv) -->
-      <div class="kpi-grid">
+      <!-- KPI CARDS (live) -->
+      <div class="kpi-grid" role="region" aria-label="Key performance indicators">
         <div class="card">
-          <h3>Open Orders (Live)</h3>
+          <h3>Open Orders</h3>
           <div class="kpi">
             <div class="value" id="kpiOpen">—</div>
-            <div class="delta up" id="kpiOpenDelta">—</div>
+            <span class="delta up" id="kpiOpenDelta">—</span>
           </div>
         </div>
         <div class="card">
           <h3>New in Last 24h</h3>
           <div class="kpi">
             <div class="value" id="kpiNew24">—</div>
-            <div class="delta up" id="kpiNewDelta">—</div>
+            <span class="delta up" id="kpiNewDelta">—</span>
           </div>
         </div>
         <div class="card">
-          <h3>Avg Order Age</h3>
+          <h3>Average Order Age</h3>
           <div class="kpi">
             <div class="value" id="kpiAvgAge">—</div>
-            <div class="delta down" id="kpiAvgAgeDelta">—</div>
+            <span class="delta down" id="kpiAvgAgeDelta">—</span>
           </div>
         </div>
         <div class="card">
           <h3>Oldest Order Age</h3>
           <div class="kpi">
             <div class="value" id="kpiOldest">—</div>
-            <div class="delta warn" id="kpiOldestDelta">—</div>
+            <span class="delta warn" id="kpiOldestDelta">—</span>
           </div>
         </div>
       </div>
 
-      <!-- CHARTS -->
+      <!-- Charts -->
       <div class="panel-grid">
         <div class="card">
           <div class="panel-header">
-            <h2>Open-Order Throughput (Created)</h2>
+            <h2>Open-Order Throughput</h2>
             <div class="filters">
-              <select class="select" id="timeRange">
+              <label for="timeRange" class="subtle" style="align-self:center">Range</label>
+              <select class="select" id="timeRange" aria-label="Time range">
                 <option value="24h">Last 24 Hours</option>
                 <option value="7d">Last 7 Days</option>
                 <option value="30d">Last 30 Days</option>
               </select>
-              <button class="btn" id="exportPng">Export PNG</button>
+              <button class="btn" id="exportPng" type="button">Export PNG</button>
             </div>
           </div>
-          <canvas id="throughputChart" height="120"></canvas>
+          <canvas id="throughputChart" height="120" aria-label="Orders created over time" role="img"></canvas>
         </div>
+
         <div class="card">
           <div class="panel-header">
             <h2>Open Orders by Warehouse</h2>
           </div>
-          <canvas id="breakdownChart" height="120"></canvas>
-          <div class="subtle" style="margin-top:8px">Count of open orders grouped by warehouse.</div>
+          <canvas id="breakdownChart" height="120" aria-label="Open orders by warehouse" role="img"></canvas>
+          <div class="subtle" style="margin-top:8px">Counts of open orders grouped by warehouse.</div>
         </div>
       </div>
 
-      <!-- LIVE OPEN ORDERS TABLE -->
+      <!-- Orders table -->
       <div class="card">
         <div class="panel-header">
           <h2>Live Open Orders</h2>
           <div class="filters">
-            <button class="btn" id="exportCsv">Export CSV</button>
+            <button class="btn" id="exportCsv" type="button">Export CSV</button>
           </div>
         </div>
         <div style="overflow:auto; max-height:420px">
@@ -185,149 +356,184 @@
   </section>
 </div>
 
-<script> 
-  // === THEME TOGGLE ===
-  const root=document.documentElement, themeToggle=document.getElementById('themeToggle');
-  const currentTheme=localStorage.getItem('wm-theme')||'dark';
-  if(currentTheme==='light') root.classList.add('light');
-  themeToggle.addEventListener('click',()=>{root.classList.toggle('light');localStorage.setItem('wm-theme',root.classList.contains('light')?'light':'dark');});
+<script>
+  // Theme (light default; toggle adds .theme-dark to <html>)
+  const root = document.documentElement;
+  const themeToggle = document.getElementById('themeToggle');
+  const savedTheme = localStorage.getItem('wm-theme') || 'light';
+  if (savedTheme === 'dark') {
+    root.classList.add('theme-dark');
+    themeToggle.setAttribute('aria-pressed', 'true');
+  }
+  themeToggle.addEventListener('click', () => {
+    const dark = root.classList.toggle('theme-dark');
+    themeToggle.setAttribute('aria-pressed', String(dark));
+    localStorage.setItem('wm-theme', dark ? 'dark' : 'light');
+  });
 
-  // === HELPERS ===
+  // Helpers
+  const el = (id) => document.getElementById(id);
   const fmtInt = new Intl.NumberFormat();
-  const fmtDate = (d)=> new Date(d).toLocaleString();
+  const fmtDate = (d) => new Date(d).toLocaleString();
   const MS_HOUR = 3600_000, MS_DAY = 86_400_000;
+  const rangeHours = (r) => r === '24h' ? 24 : r === '7d' ? 7*24 : 30*24;
 
-  const el = id => document.getElementById(id);
-  const pathRangeToHours = (range)=> range==='24h'?24 : range==='7d'? 7*24 : 30*24;
-
-  // Map Extensiv order -> normalized shape
-  function mapOrder(o){
-    const orderNumber = o.orderNumber || o.OrderNumber || o.orderNo || o.externalId;
-    const account     = o.account || o.Customer || o.client || o.accountName || '';
-    const warehouse   = o.warehouse || o.Warehouse || o.facility || '';
-    const createdAt   = o.createdAt || o.CreatedAt || o.created_at || o.created || o.CreateDate;
-    return { orderNumber, account, warehouse, createdAt: createdAt ? new Date(createdAt) : null };
-  }
-
-  // === BACKEND CALL (expects /extensiv/open-orders?range=24h|7d|30d ) ===
-  async function fetchOpenOrders(range='24h'){
-    // CHANGED: point to your mounted router at /extensiv instead of /api/extensiv
-    const res = await fetch(`/extensiv/open-orders?range=${encodeURIComponent(range)}`, { headers:{'Accept':'application/json'} });
-    if(!res.ok) throw new Error(`API ${res.status}`);
-    const json = await res.json();
-    const orders = (json.orders||[]).map(mapOrder).filter(o => o.createdAt instanceof Date && !isNaN(o.createdAt));
-    return orders;
-  }
-
-  // === KPI CALCS ===
-  function ageStr(ms){
-    const d = Math.floor(ms/MS_DAY);
-    const h = Math.floor((ms%MS_DAY)/MS_HOUR);
-    if(d>0) return `${d}d ${h}h`;
-    if(h>0) return `${h}h`;
-    const m = Math.max(0, Math.floor((ms%MS_HOUR)/60000));
+  function ageStr(ms) {
+    const d = Math.floor(ms / MS_DAY);
+    const h = Math.floor((ms % MS_DAY) / MS_HOUR);
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h`;
+    const m = Math.max(0, Math.floor((ms % MS_HOUR) / 60000));
     return `${m}m`;
   }
 
-  function setKpis(orders){
-    const now = Date.now();
-    const ages = orders.map(o => now - o.createdAt.getTime()).filter(n => n>=0);
-    const openCount = orders.length;
-    const new24 = orders.filter(o => (now - o.createdAt.getTime()) <= MS_DAY).length;
-    const avgAgeMs = ages.length ? ages.reduce((a,b)=>a+b,0)/ages.length : 0;
-    const oldestMs = ages.length ? Math.max(...ages) : 0;
+  // Map order fields to normalized shape
+  function mapOrder(o) {
+    const orderNumber = o.orderNumber || o.OrderNumber || o.orderNo || o.externalId || '';
+    const account     = o.account || o.Customer || o.client || o.accountName || o?.readOnly?.customerName || '';
+    const warehouse   = o.warehouse || o.Warehouse || o.facility || o?.readOnly?.warehouseName || '';
+    const createdAt   = o.createdAt || o.CreatedAt || o.created || o.CreateDate || o?.readOnly?.createdDate || o?.readOnly?.createDate;
+    return { orderNumber, account, warehouse, createdAt: createdAt ? new Date(createdAt) : null };
+  }
 
-    el('kpiOpen').textContent = fmtInt.format(openCount);
-    el('kpiNew24').textContent = fmtInt.format(new24);
+  // Backend call (mounted at /extensiv in your server)
+  async function fetchOpenOrders(range = '24h') {
+    const res = await fetch(`/extensiv/open-orders?range=${encodeURIComponent(range)}`, { headers: { 'Accept': 'application/json' }});
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    const json = await res.json();
+    const orders = (json.orders || []).map(mapOrder).filter(o => o.createdAt instanceof Date && !isNaN(o.createdAt));
+    return orders;
+  }
+
+  // KPIs
+  function setKpis(orders) {
+    const now = Date.now();
+    const ages = orders.map(o => now - o.createdAt.getTime()).filter(n => n >= 0);
+
+    const openCount = orders.length;
+    const new24     = orders.filter(o => (now - o.createdAt.getTime()) <= MS_DAY).length;
+    const avgAgeMs  = ages.length ? ages.reduce((a,b)=>a+b,0) / ages.length : 0;
+    const oldestMs  = ages.length ? Math.max(...ages) : 0;
+
+    el('kpiOpen').textContent   = fmtInt.format(openCount);
+    el('kpiNew24').textContent  = fmtInt.format(new24);
     el('kpiAvgAge').textContent = ages.length ? ageStr(avgAgeMs) : '—';
     el('kpiOldest').textContent = ages.length ? ageStr(oldestMs) : '—';
 
-    const last = window.__kpi_last || {};
-    const delta = (curr, prev)=> prev==null ? '—' : ((curr-prev)>=0?'+':'') + (curr-prev);
-    el('kpiOpenDelta').textContent = delta(openCount, last.open);
-    el('kpiNewDelta').textContent = delta(new24, last.new24);
+    const last = window.__last || {};
+    const delta = (curr, prev) => prev == null ? '—' : ((curr - prev) >= 0 ? '+' : '') + (curr - prev);
+    el('kpiOpenDelta').textContent   = delta(openCount, last.open);
+    el('kpiNewDelta').textContent    = delta(new24, last.new24);
     el('kpiAvgAgeDelta').textContent = '—';
     el('kpiOldestDelta').textContent = '—';
-    window.__kpi_last = { open: openCount, new24 };
+    window.__last = { open: openCount, new24 };
   }
 
-  // === CHARTS ===
+  // Charts
   let throughputChart, breakdownChart;
 
-  function groupByPeriod(orders, range){
-    const hours = pathRangeToHours(range);
+  function groupBy(orders, range) {
+    const hours = rangeHours(range);
     const now = Date.now();
-    const by = range==='24h' ? 'hour' : 'day';
+    const byHour = range === '24h';
     const labels = [];
-    const map = new Map();
+    const bins = new Map();
 
-    for(let i=hours-1;i>=0;i--){
-      const d = new Date(now - i*MS_HOUR);
-      const key = by==='hour'
+    for (let i = hours - 1; i >= 0; i--) {
+      const d = new Date(now - i * MS_HOUR);
+      const key = byHour
         ? `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:00`
         : `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
-      labels.push(by==='hour' ? d.getHours()+':00' : d.toLocaleDateString());
-      map.set(key,0);
+      labels.push(byHour ? `${String(d.getHours()).padStart(2,'0')}:00` : d.toLocaleDateString());
+      bins.set(key, 0);
     }
 
-    orders.forEach(o=>{
+    orders.forEach(o => {
       const d = o.createdAt;
-      const key = (by==='hour')
+      const key = (range === '24h')
         ? `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:00`
         : `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
-      if(map.has(key)) map.set(key, map.get(key)+1);
+      if (bins.has(key)) bins.set(key, bins.get(key) + 1);
     });
 
-    const data = Array.from(map.values());
-    return { labels, data };
+    return { labels, data: Array.from(bins.values()) };
   }
 
-  function renderThroughput(range, orders){
-    const {labels, data} = groupByPeriod(orders, range);
+  function renderThroughput(range, orders) {
+    const { labels, data } = groupBy(orders, range);
     throughputChart && throughputChart.destroy();
     throughputChart = new Chart(el('throughputChart'), {
-      type:'line',
-      data:{ labels, datasets:[{ label:'Orders Created', data, tension:.35, borderWidth:2, fill:true,
-        backgroundColor:(c)=>{ const {ctx, chartArea}=c.chart; if(!chartArea) return 'transparent';
-          const g=ctx.createLinearGradient(0,chartArea.top,0,chartArea.bottom);
-          g.addColorStop(0,'rgba(34,211,238,0.35)'); g.addColorStop(1,'rgba(34,211,238,0.02)'); return g; } }]},
-      options:{ responsive:true, plugins:{ legend:{display:false}, tooltip:{mode:'index',intersect:false}},
-        interaction:{mode:'nearest',intersect:false},
-        scales:{ x:{ grid:{color:'rgba(148,163,184,.15)'}}, y:{ beginAtZero:true, grid:{color:'rgba(148,163,184,.15)'} } } }
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Orders Created',
+          data,
+          tension: 0.25,
+          borderWidth: 2,
+          fill: true,
+          backgroundColor: (ctx) => {
+            const ca = ctx.chart.chartArea; if (!ca) return 'transparent';
+            const g = ctx.chart.ctx.createLinearGradient(0, ca.top, 0, ca.bottom);
+            g.addColorStop(0, 'rgba(14,165,233,0.25)');
+            g.addColorStop(1, 'rgba(14,165,233,0.02)');
+            return g;
+          },
+          borderColor: 'rgba(14,165,233,1)'
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+          x: { grid: { color: 'rgba(0,0,0,0.06)' } },
+          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } }
+        }
+      }
     });
   }
 
-  function renderWarehouseBreakdown(orders){
+  function renderWarehouseBreakdown(orders) {
     const counts = {};
-    orders.forEach(o=> { counts[o.warehouse||'—'] = (counts[o.warehouse||'—']||0) + 1; });
+    orders.forEach(o => { counts[o.warehouse || '—'] = (counts[o.warehouse || '—'] || 0) + 1; });
     const labels = Object.keys(counts);
-    const data   = Object.values(counts);
+    const data = Object.values(counts);
+
     breakdownChart && breakdownChart.destroy();
     breakdownChart = new Chart(el('breakdownChart'), {
-      type:'bar',
-      data:{ labels, datasets:[{ label:'Open Orders', data, borderWidth:1 }]},
-      options:{ responsive:true, plugins:{ legend:{position:'bottom'} },
-        scales:{ y:{ beginAtZero:true }, x:{ grid:{display:false} } } }
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Open Orders', data, borderWidth: 1, backgroundColor: 'rgba(14,165,233,0.3)', borderColor: 'rgba(14,165,233,1)' }] },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } },
+          x: { grid: { display: false } }
+        }
+      }
     });
   }
 
-  // === TABLE ===
-  function renderTable(orders){
+  // Table
+  function renderTable(orders) {
     const q = el('searchBox').value.trim().toLowerCase();
-    const tbody = document.querySelector('#ordersTable tbody'); tbody.innerHTML='';
+    const tbody = document.querySelector('#ordersTable tbody');
+    tbody.innerHTML = '';
     const now = Date.now();
+
     orders
-      .filter(o=>{
+      .filter(o => {
         const s = `${o.orderNumber} ${o.account} ${o.warehouse}`.toLowerCase();
         return !q || s.includes(q);
       })
-      .sort((a,b)=> b.createdAt - a.createdAt)
-      .forEach(o=>{
-        const tr=document.createElement('tr');
+      .sort((a,b) => b.createdAt - a.createdAt)
+      .forEach(o => {
+        const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td>${o.orderNumber||'—'}</td>
-          <td>${o.account||'—'}</td>
-          <td>${o.warehouse||'—'}</td>
+          <td>${o.orderNumber || '—'}</td>
+          <td>${o.account || '—'}</td>
+          <td>${o.warehouse || '—'}</td>
           <td>${fmtDate(o.createdAt)}</td>
           <td>${ageStr(now - o.createdAt.getTime())}</td>
         `;
@@ -335,44 +541,48 @@
       });
   }
 
-  // === EXPORTS ===
-  el('exportPng').addEventListener('click',()=>{
-    if(!throughputChart) return;
-    const url = throughputChart.toBase64Image('image/png',1);
-    const a = document.createElement('a'); a.href=url; a.download='open-orders-throughput.png'; a.click();
+  // Exports
+  el('exportPng').addEventListener('click', () => {
+    if (!throughputChart) return;
+    const url = throughputChart.toBase64Image('image/png', 1);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'open-orders-throughput.png'; a.click();
   });
 
-  el('exportCsv').addEventListener('click', ()=>{
+  el('exportCsv').addEventListener('click', () => {
     const rows = [['Order #','Account','Warehouse','Created','Age']];
     const now = Date.now();
-    (window.__orders_cache||[]).forEach(o=>{
-      rows.push([o.orderNumber||'', o.account||'', o.warehouse||'', o.createdAt.toISOString(), ageStr(now - o.createdAt.getTime())]);
+    (window.__orders_cache || []).forEach(o => {
+      rows.push([o.orderNumber || '', o.account || '', o.warehouse || '', o.createdAt.toISOString(), ageStr(now - o.createdAt.getTime())]);
     });
-    const csv = rows.map(r=> r.map(x=> `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], {type:'text/csv'});
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='open-orders.csv'; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+    const csv = rows.map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'open-orders.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
-  // === LOAD / REFRESH ===
-  el('refreshBtn').addEventListener('click',()=> load());
-  el('timeRange').addEventListener('change',()=> load());
-  el('searchBox').addEventListener('input',()=> renderTable(window.__orders_cache||[]));
-
-  async function load(){
+  // Load/refresh
+  async function load() {
     const range = el('timeRange').value;
-    try{
+    try {
       const orders = await fetchOpenOrders(range);
       window.__orders_cache = orders;
       setKpis(orders);
       renderThroughput(range, orders);
       renderWarehouseBreakdown(orders);
       renderTable(orders);
-    }catch(err){
+    } catch (err) {
       console.error('Failed to load open orders:', err);
       setKpis([]); renderThroughput('24h', []); renderWarehouseBreakdown([]); renderTable([]);
     }
   }
+
+  el('refreshBtn').addEventListener('click', load);
+  el('timeRange').addEventListener('change', load);
+  el('searchBox').addEventListener('input', () => renderTable(window.__orders_cache || []));
 
   load();
 </script>

@@ -9,234 +9,75 @@
     :root {
       --bg: #fafafa;
       --panel: #ffffff;
-      --text: #1f2937;          /* slate-800 */
-      --muted: #6b7280;         /* gray-500 */
-      --border: #e5e7eb;        /* gray-200 */
-      --brand: #0ea5e9;         /* sky-500 */
-      --brand-600: #0284c7;     /* sky-600 */
-      --positive: #22c55e;      /* green-500 */
-      --negative: #ef4444;      /* red-500 */
-      --warn: #f59e0b;          /* amber-500 */
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --brand: #0ea5e9;
+      --brand-600: #0284c7;
       --card: #ffffff;
+      --positive:#22c55e; --negative:#ef4444; --warn:#f59e0b;
     }
-
-    /* Optional dark mode via toggle */
     .theme-dark {
-      --bg: #0b1220;
-      --panel: #0e172a;
-      --text: #e5e7eb;
-      --muted: #94a3b8;
-      --border: #1f2a44;
-      --brand: #38bdf8;
-      --brand-600: #0ea5e9;
-      --card: #0b1220;
+      --bg:#0b1220; --panel:#0e172a; --text:#e5e7eb; --muted:#94a3b8; --border:#1f2a44;
+      --brand:#38bdf8; --brand-600:#0ea5e9; --card:#0b1220;
     }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;background:var(--bg);color:var(--text);
+      font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+    }
+    a{color:inherit;text-decoration:none}
 
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family:
-        ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
-        "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
-    }
-    a { color: inherit; text-decoration: none; }
+    .layout{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+    .sidebar{background:var(--panel);border-right:1px solid var(--border);padding:20px}
+    .brand{font-weight:700;font-size:18px;letter-spacing:.2px}
+    .brand small{display:block;color:var(--muted);font-weight:500;margin-top:2px}
+    .nav{margin-top:24px;display:grid;gap:6px}
+    .nav a{padding:10px 12px;border-radius:8px;border:1px solid transparent}
+    .nav a:hover,.nav a.active{background:var(--panel);border-color:var(--border)}
 
-    /* Layout */
-    .layout {
-      display: grid;
-      grid-template-columns: 240px 1fr;
-      min-height: 100vh;
+    .content{display:grid;grid-template-rows:auto 1fr}
+    .topbar{
+      position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--border);
+      display:flex;align-items:center;justify-content:space-between;padding:12px 16px;
     }
+    .left{display:flex;align-items:center;gap:12px;min-width:0}
+    .search{display:flex;align-items:center;gap:8px;background:var(--card);
+      border:1px solid var(--border);padding:6px 10px;border-radius:8px;width:420px;max-width:54vw}
+    .search input{border:0;outline:0;width:100%;background:transparent;color:var(--text)}
+    .actions{display:flex;gap:8px}
+    .btn{border:1px solid var(--border);background:var(--panel);color:var(--text);
+      padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:500}
+    .btn.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+    .btn:hover{filter:brightness(.98)} .btn.primary:hover{background:var(--brand-600)}
 
-    /* Sidebar */
-    .sidebar {
-      background: var(--panel);
-      border-right: 1px solid var(--border);
-      padding: 20px;
-    }
-    .brand {
-      font-weight: 700;
-      font-size: 18px;
-      letter-spacing: .2px;
-    }
-    .brand small {
-      display: block;
-      color: var(--muted);
-      font-weight: 500;
-      margin-top: 2px;
-    }
-    .nav {
-      margin-top: 24px;
-      display: grid;
-      gap: 6px;
-    }
-    .nav a {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid transparent;
-      color: var(--text);
-    }
-    .nav a:hover,
-    .nav a.active {
-      background: var(--panel);
-      border-color: var(--border);
-    }
+    .main{padding:18px;display:grid;gap:16px}
 
-    /* Content */
-    .content {
-      display: grid;
-      grid-template-rows: auto 1fr;
-      min-width: 0;
-    }
-    .topbar {
-      position: sticky;
-      top: 0;
-      z-index: 5;
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-    }
-    .topbar .left {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-    }
-    .search {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      padding: 6px 10px;
-      border-radius: 8px;
-      width: 420px;
-      max-width: 54vw;
-    }
-    .search input {
-      border: 0;
-      outline: 0;
-      width: 100%;
-      background: transparent;
-      color: var(--text);
-    }
-    .actions {
-      display: flex;
-      gap: 8px;
-    }
-    .btn {
-      border: 1px solid var(--border);
-      background: var(--panel);
-      color: var(--text);
-      padding: 8px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 500;
-    }
-    .btn.primary {
-      background: var(--brand);
-      color: #fff;
-      border-color: var(--brand);
-    }
-    .btn:hover { filter: brightness(0.98); }
-    .btn.primary:hover { background: var(--brand-600); }
+    .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+    @media(max-width:1200px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:720px){.layout{grid-template-columns:1fr}.kpi-grid{grid-template-columns:1fr}}
 
-    .main {
-      padding: 18px;
-      display: grid;
-      gap: 16px;
-    }
+    .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+    .card h3{margin:0 0 6px;font-size:13px;color:var(--muted);font-weight:600}
+    .kpi{display:flex;align-items:baseline;justify-content:space-between}
+    .kpi .value{font-size:26px;font-weight:800}
+    .delta{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+    .delta.up{color:var(--positive)} .delta.down{color:var(--negative)} .delta.warn{color:var(--warn)}
 
-    /* KPI cards */
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 12px;
-    }
-    @media (max-width: 1200px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 720px)  { .layout { grid-template-columns: 1fr; } .kpi-grid { grid-template-columns: 1fr; } }
+    /* Only one analysis panel now */
+    .panel-grid{display:grid;grid-template-columns:1fr;gap:12px}
 
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 14px;
-    }
-    .card h3 {
-      margin: 0 0 6px;
-      font-size: 13px;
-      color: var(--muted);
-      font-weight: 600;
-    }
-    .kpi {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-    }
-    .kpi .value { font-size: 26px; font-weight: 800; }
-    .delta {
-      font-size: 12px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      color: var(--muted);
-    }
-    .delta.up { color: var(--positive); }
-    .delta.down { color: var(--negative); }
-    .delta.warn { color: var(--warn); }
+    .panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    .panel-header h2{margin:0;font-size:16px;font-weight:700}
+    .filters{display:flex;gap:8px}
+    .select,.input{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--text)}
 
-    /* Panels */
-    .panel-grid {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 12px;
-    }
-    @media (max-width: 1200px) { .panel-grid { grid-template-columns: 1fr; } }
-
-    .panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-    .panel-header h2 {
-      margin: 0;
-      font-size: 16px;
-      font-weight: 700;
-    }
-    .filters { display: flex; gap: 8px; }
-    .select, .input {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 6px 10px;
-      color: var(--text);
-    }
-
-    /* Table */
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    thead th {
-      text-align: left;
-      color: var(--muted);
-      font-weight: 600;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-    }
-    tbody td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: top;
-    }
-    tbody tr:hover td { background: rgba(2, 6, 23, 0.02); }
-
-    .subtle { color: var(--muted); font-size: 12px; }
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    thead th{text-align:left;color:var(--muted);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+    tbody td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+    tbody tr:hover td{background:rgba(2,6,23,.02)}
+    .subtle{color:var(--muted);font-size:12px}
   </style>
 </head>
 <body>
@@ -246,7 +87,6 @@
       WestMark Portal
       <small>KPI Dashboards</small>
     </div>
-
     <nav class="nav" aria-label="Main Navigation">
       <a href="/kpi.html" class="active">Dashboards</a>
       <a href="/alloc-single">Allocations</a>
@@ -269,7 +109,7 @@
     </div>
 
     <main class="main">
-      <!-- KPI CARDS (live) -->
+      <!-- KPI CARDS -->
       <div class="kpi-grid" role="region" aria-label="Key performance indicators">
         <div class="card">
           <h3>Open Orders</h3>
@@ -301,7 +141,7 @@
         </div>
       </div>
 
-      <!-- Charts -->
+      <!-- Single analysis panel: Throughput -->
       <div class="panel-grid">
         <div class="card">
           <div class="panel-header">
@@ -317,14 +157,6 @@
             </div>
           </div>
           <canvas id="throughputChart" height="120" aria-label="Orders created over time" role="img"></canvas>
-        </div>
-
-        <div class="card">
-          <div class="panel-header">
-            <h2>Open Orders by Warehouse</h2>
-          </div>
-          <canvas id="breakdownChart" height="120" aria-label="Open orders by warehouse" role="img"></canvas>
-          <div class="subtle" style="margin-top:8px">Counts of open orders grouped by warehouse.</div>
         </div>
       </div>
 
@@ -357,14 +189,11 @@
 </div>
 
 <script>
-  // Theme (light default; toggle adds .theme-dark to <html>)
+  // Theme
   const root = document.documentElement;
   const themeToggle = document.getElementById('themeToggle');
   const savedTheme = localStorage.getItem('wm-theme') || 'light';
-  if (savedTheme === 'dark') {
-    root.classList.add('theme-dark');
-    themeToggle.setAttribute('aria-pressed', 'true');
-  }
+  if (savedTheme === 'dark') { root.classList.add('theme-dark'); themeToggle.setAttribute('aria-pressed','true'); }
   themeToggle.addEventListener('click', () => {
     const dark = root.classList.toggle('theme-dark');
     themeToggle.setAttribute('aria-pressed', String(dark));
@@ -372,23 +201,23 @@
   });
 
   // Helpers
-  const el = (id) => document.getElementById(id);
+  const el = (id)=>document.getElementById(id);
   const fmtInt = new Intl.NumberFormat();
-  const fmtDate = (d) => new Date(d).toLocaleString();
+  const fmtDate = (d)=>new Date(d).toLocaleString();
   const MS_HOUR = 3600_000, MS_DAY = 86_400_000;
-  const rangeHours = (r) => r === '24h' ? 24 : r === '7d' ? 7*24 : 30*24;
+  const rangeHours = (r)=> r==='24h'?24 : r==='7d'?7*24 : 30*24;
 
-  function ageStr(ms) {
-    const d = Math.floor(ms / MS_DAY);
-    const h = Math.floor((ms % MS_DAY) / MS_HOUR);
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h`;
-    const m = Math.max(0, Math.floor((ms % MS_HOUR) / 60000));
+  function ageStr(ms){
+    const d = Math.floor(ms/MS_DAY);
+    const h = Math.floor((ms%MS_DAY)/MS_HOUR);
+    if(d>0) return `${d}d ${h}h`;
+    if(h>0) return `${h}h`;
+    const m = Math.max(0, Math.floor((ms%MS_HOUR)/60000));
     return `${m}m`;
   }
 
-  // Map order fields to normalized shape
-  function mapOrder(o) {
+  // Normalize order object
+  function mapOrder(o){
     const orderNumber = o.orderNumber || o.OrderNumber || o.orderNo || o.externalId || '';
     const account     = o.account || o.Customer || o.client || o.accountName || o?.readOnly?.customerName || '';
     const warehouse   = o.warehouse || o.Warehouse || o.facility || o?.readOnly?.warehouseName || '';
@@ -396,23 +225,23 @@
     return { orderNumber, account, warehouse, createdAt: createdAt ? new Date(createdAt) : null };
   }
 
-  // Backend call (mounted at /extensiv in your server)
-  async function fetchOpenOrders(range = '24h') {
-    const res = await fetch(`/extensiv/open-orders?range=${encodeURIComponent(range)}`, { headers: { 'Accept': 'application/json' }});
-    if (!res.ok) throw new Error(`API ${res.status}`);
+  // Backend call (mounted at /extensiv)
+  async function fetchOpenOrders(range='24h'){
+    const res = await fetch(`/extensiv/open-orders?range=${encodeURIComponent(range)}`, { headers:{Accept:'application/json'} });
+    if(!res.ok) throw new Error(`API ${res.status}`);
     const json = await res.json();
-    const orders = (json.orders || []).map(mapOrder).filter(o => o.createdAt instanceof Date && !isNaN(o.createdAt));
+    const orders = (json.orders||[]).map(mapOrder).filter(o => o.createdAt instanceof Date && !isNaN(o.createdAt));
     return orders;
   }
 
   // KPIs
-  function setKpis(orders) {
+  function setKpis(orders){
     const now = Date.now();
-    const ages = orders.map(o => now - o.createdAt.getTime()).filter(n => n >= 0);
+    const ages = orders.map(o => now - o.createdAt.getTime()).filter(n => n>=0);
 
     const openCount = orders.length;
     const new24     = orders.filter(o => (now - o.createdAt.getTime()) <= MS_DAY).length;
-    const avgAgeMs  = ages.length ? ages.reduce((a,b)=>a+b,0) / ages.length : 0;
+    const avgAgeMs  = ages.length ? ages.reduce((a,b)=>a+b,0)/ages.length : 0;
     const oldestMs  = ages.length ? Math.max(...ages) : 0;
 
     el('kpiOpen').textContent   = fmtInt.format(openCount);
@@ -421,7 +250,7 @@
     el('kpiOldest').textContent = ages.length ? ageStr(oldestMs) : '—';
 
     const last = window.__last || {};
-    const delta = (curr, prev) => prev == null ? '—' : ((curr - prev) >= 0 ? '+' : '') + (curr - prev);
+    const delta = (curr, prev)=> prev==null ? '—' : ((curr-prev)>=0?'+':'') + (curr-prev);
     el('kpiOpenDelta').textContent   = delta(openCount, last.open);
     el('kpiNewDelta').textContent    = delta(new24, last.new24);
     el('kpiAvgAgeDelta').textContent = '—';
@@ -429,18 +258,17 @@
     window.__last = { open: openCount, new24 };
   }
 
-  // Charts
-  let throughputChart, breakdownChart;
-
-  function groupBy(orders, range) {
+  // Chart: Throughput only
+  let throughputChart;
+  function groupForThroughput(orders, range){
     const hours = rangeHours(range);
     const now = Date.now();
-    const byHour = range === '24h';
+    const byHour = (range === '24h');
     const labels = [];
     const bins = new Map();
 
-    for (let i = hours - 1; i >= 0; i--) {
-      const d = new Date(now - i * MS_HOUR);
+    for(let i=hours-1;i>=0;i--){
+      const d = new Date(now - i*MS_HOUR);
       const key = byHour
         ? `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:00`
         : `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
@@ -448,92 +276,55 @@
       bins.set(key, 0);
     }
 
-    orders.forEach(o => {
+    orders.forEach(o=>{
       const d = o.createdAt;
-      const key = (range === '24h')
+      const key = byHour
         ? `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:00`
         : `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
-      if (bins.has(key)) bins.set(key, bins.get(key) + 1);
+      if(bins.has(key)) bins.set(key, bins.get(key)+1);
     });
 
     return { labels, data: Array.from(bins.values()) };
   }
 
-  function renderThroughput(range, orders) {
-    const { labels, data } = groupBy(orders, range);
+  function renderThroughput(range, orders){
+    const {labels, data} = groupForThroughput(orders, range);
     throughputChart && throughputChart.destroy();
     throughputChart = new Chart(el('throughputChart'), {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Orders Created',
-          data,
-          tension: 0.25,
-          borderWidth: 2,
-          fill: true,
-          backgroundColor: (ctx) => {
-            const ca = ctx.chart.chartArea; if (!ca) return 'transparent';
-            const g = ctx.chart.ctx.createLinearGradient(0, ca.top, 0, ca.bottom);
-            g.addColorStop(0, 'rgba(14,165,233,0.25)');
-            g.addColorStop(1, 'rgba(14,165,233,0.02)');
-            return g;
-          },
-          borderColor: 'rgba(14,165,233,1)'
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
-        interaction: { mode: 'nearest', intersect: false },
-        scales: {
-          x: { grid: { color: 'rgba(0,0,0,0.06)' } },
-          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } }
-        }
-      }
-    });
-  }
-
-  function renderWarehouseBreakdown(orders) {
-    const counts = {};
-    orders.forEach(o => { counts[o.warehouse || '—'] = (counts[o.warehouse || '—'] || 0) + 1; });
-    const labels = Object.keys(counts);
-    const data = Object.values(counts);
-
-    breakdownChart && breakdownChart.destroy();
-    breakdownChart = new Chart(el('breakdownChart'), {
-      type: 'bar',
-      data: { labels, datasets: [{ label: 'Open Orders', data, borderWidth: 1, backgroundColor: 'rgba(14,165,233,0.3)', borderColor: 'rgba(14,165,233,1)' }] },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } },
-          x: { grid: { display: false } }
-        }
+      type:'line',
+      data:{ labels, datasets:[{
+        label:'Orders Created', data, tension:.25, borderWidth:2, fill:true,
+        backgroundColor:(ctx)=>{ const ca=ctx.chart.chartArea; if(!ca) return 'transparent';
+          const g=ctx.chart.ctx.createLinearGradient(0,ca.top,0,ca.bottom);
+          g.addColorStop(0,'rgba(14,165,233,0.25)'); g.addColorStop(1,'rgba(14,165,233,0.02)'); return g; },
+        borderColor:'rgba(14,165,233,1)'
+      }]},
+      options:{
+        responsive:true,
+        plugins:{ legend:{display:false}, tooltip:{mode:'index',intersect:false}},
+        interaction:{mode:'nearest',intersect:false},
+        scales:{ x:{ grid:{color:'rgba(0,0,0,0.06)'}}, y:{ beginAtZero:true, grid:{color:'rgba(0,0,0,0.06)'} } }
       }
     });
   }
 
   // Table
-  function renderTable(orders) {
+  function renderTable(orders){
     const q = el('searchBox').value.trim().toLowerCase();
-    const tbody = document.querySelector('#ordersTable tbody');
-    tbody.innerHTML = '';
+    const tbody = document.querySelector('#ordersTable tbody'); tbody.innerHTML='';
     const now = Date.now();
-
     orders
-      .filter(o => {
+      .filter(o=>{
         const s = `${o.orderNumber} ${o.account} ${o.warehouse}`.toLowerCase();
         return !q || s.includes(q);
       })
-      .sort((a,b) => b.createdAt - a.createdAt)
-      .forEach(o => {
-        const tr = document.createElement('tr');
+      .sort((a,b)=> b.createdAt - a.createdAt)
+      .forEach(o=>{
+        const tr=document.createElement('tr');
         tr.innerHTML = `
-          <td>${o.orderNumber || '—'}</td>
-          <td>${o.account || '—'}</td>
-          <td>${o.warehouse || '—'}</td>
+          <td>${o.orderNumber||'—'}</td>
+          <td>${o.account||'—'}</td>
+          <td>${o.warehouse||'—'}</td>
           <td>${fmtDate(o.createdAt)}</td>
           <td>${ageStr(now - o.createdAt.getTime())}</td>
         `;
@@ -542,47 +333,40 @@
   }
 
   // Exports
-  el('exportPng').addEventListener('click', () => {
-    if (!throughputChart) return;
-    const url = throughputChart.toBase64Image('image/png', 1);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'open-orders-throughput.png'; a.click();
+  el('exportPng').addEventListener('click',()=>{
+    if(!throughputChart) return;
+    const url = throughputChart.toBase64Image('image/png',1);
+    const a = document.createElement('a'); a.href=url; a.download='open-orders-throughput.png'; a.click();
   });
-
-  el('exportCsv').addEventListener('click', () => {
+  el('exportCsv').addEventListener('click', ()=>{
     const rows = [['Order #','Account','Warehouse','Created','Age']];
     const now = Date.now();
-    (window.__orders_cache || []).forEach(o => {
-      rows.push([o.orderNumber || '', o.account || '', o.warehouse || '', o.createdAt.toISOString(), ageStr(now - o.createdAt.getTime())]);
+    (window.__orders_cache||[]).forEach(o=>{
+      rows.push([o.orderNumber||'', o.account||'', o.warehouse||'', o.createdAt.toISOString(), ageStr(now - o.createdAt.getTime())]);
     });
-    const csv = rows.map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'open-orders.csv';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    const csv = rows.map(r=> r.map(x=> `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='open-orders.csv'; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
   });
 
   // Load/refresh
-  async function load() {
+  async function load(){
     const range = el('timeRange').value;
-    try {
+    try{
       const orders = await fetchOpenOrders(range);
       window.__orders_cache = orders;
       setKpis(orders);
       renderThroughput(range, orders);
-      renderWarehouseBreakdown(orders);
       renderTable(orders);
-    } catch (err) {
+    }catch(err){
       console.error('Failed to load open orders:', err);
-      setKpis([]); renderThroughput('24h', []); renderWarehouseBreakdown([]); renderTable([]);
+      setKpis([]); renderThroughput('24h', []); renderTable([]);
     }
   }
-
   el('refreshBtn').addEventListener('click', load);
   el('timeRange').addEventListener('change', load);
-  el('searchBox').addEventListener('input', () => renderTable(window.__orders_cache || []));
+  el('searchBox').addEventListener('input', ()=> renderTable(window.__orders_cache||[]));
 
   load();
 </script>

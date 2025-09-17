@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Scan & Print — Shipping Label UPC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<style>
+  :root { --bg:#0b0f17; --panel:#101826; --text:#e6e8eb; --muted:#9aa4b2; --border:#1f2937; --accent:#4fb3ff; }
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+  .wrap{max-width:900px;margin:0 auto;padding:16px}
+  .h{font-weight:700;margin:8px 0 14px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .card{border:1px solid var(--border);background:var(--panel);border-radius:12px;padding:14px}
+  .field{display:flex;gap:8px}
+  input,select,button{border:1px solid var(--border);background:#0c1522;color:var(--text);padding:10px;border-radius:10px}
+  input{min-width:240px}
+  button{cursor:pointer}
+  table{width:100%;border-collapse:collapse;margin-top:10px}
+  th,td{border-bottom:1px solid var(--border);padding:8px 10px;text-align:left}
+  .muted{color:var(--muted)}
+</style>
+<script src="http://localhost:9100/BrowserPrint-3.0.216.min.js"></script><!-- BrowserPrint local -->
+</head>
+<body>
+<div class="wrap">
+  <h1 class="h">Scan & Print — Shipping Label UPC</h1>
+
+  <div class="card">
+    <div class="row">
+      <div class="field">
+        <label for="orderId" class="muted">Order ID</label>
+        <input id="orderId" placeholder="Scan or type order ID"/>
+      </div>
+      <button id="btnFetch">Fetch Attachments</button>
+      <button id="btnClear">Clear</button>
+    </div>
+    <div id="status" class="muted" style="margin-top:8px"></div>
+
+    <table id="attTbl" style="display:none">
+      <thead><tr><th>Attachment</th><th>Type</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <div id="upcBox" style="display:none;margin-top:12px">
+      <div class="muted">Extracted UPC(s)</div>
+      <div id="upcList" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:8px">
+        <select id="printer"></select>
+        <button id="btnPrint">Print Selected UPC</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  const attTbl = $("#attTbl"), attBody = $("#attTbl tbody");
+  let currentOrderId = null, foundUPCs = [];
+
+  $("#btnClear").onclick = () => { $("#orderId").value=""; attTbl.style.display="none"; attBody.innerHTML=""; $("#upcBox").style.display="none"; $("#status").textContent=""; };
+
+  $("#btnFetch").onclick = async () => {
+    const id = $("#orderId").value.trim();
+    if (!id) return ($("#status").textContent = "Enter or scan an order ID.");
+    $("#status").textContent = "Looking up attachments…";
+    currentOrderId = id;
+    try {
+      const res = await fetch(`/extensiv-labels/orders/${encodeURIComponent(id)}/attachments`);
+      if (!res.ok) throw new Error("API " + res.status);
+      const js = await res.json();
+      const attachments = js.attachments?._embedded || js.attachments?.attachments || js.attachments?.data || js.attachments || [];
+      attBody.innerHTML = "";
+      attachments.forEach(a => {
+        const name = a.name || a.fileName || a.filename || `Attachment ${a.id || ""}`;
+        const type = a.mimeType || a.contentType || "";
+        const id = a.id || a.attachmentId || a.AttachmentId || a.href?.split("/").pop();
+        if (!id) return;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${name}</td><td>${type||""}</td>
+          <td><button data-att="${id}">Extract UPC</button></td>`;
+        attBody.appendChild(tr);
+      });
+      attTbl.style.display = attachments.length ? "" : "none";
+      $("#status").textContent = attachments.length ? "Select an attachment to extract UPCs." : "No attachments found for this order.";
+      attBody.querySelectorAll("button[data-att]").forEach(btn=>{
+        btn.onclick = () => extractUPCs(btn.getAttribute("data-att"));
+      });
+    } catch (e) {
+      console.error(e);
+      $("#status").textContent = "Failed to fetch attachments.";
+    }
+  };
+
+  async function extractUPCs(attId){
+    $("#status").textContent = "Downloading PDF and extracting UPCs…";
+    $("#upcList").innerHTML = ""; foundUPCs = [];
+    try {
+      const url = `/extensiv-labels/orders/${encodeURIComponent(currentOrderId)}/attachments/${encodeURIComponent(attId)}/upcs`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("API " + res.status);
+      const js = await res.json();
+      foundUPCs = js.upcs || [];
+      if (!foundUPCs.length) {
+        $("#status").textContent = "No UPCs detected in that PDF (may be image-only; consider OCR later).";
+        $("#upcBox").style.display = "none";
+        return;
+      }
+      $("#status").textContent = `Found ${foundUPCs.length} UPC(s).`;
+      $("#upcList").innerHTML = foundUPCs
+        .map((u, i)=>`<label style="display:block;margin:4px 0"><input type="radio" name="upc" value="${u}" ${i===0?"checked":""}/> ${u}</label>`)
+        .join("");
+      $("#upcBox").style.display = "";
+    } catch (e) {
+      console.error(e);
+      $("#status").textContent = "Failed to extract UPCs.";
+    }
+  }
+
+  // --- BrowserPrint: enumerate printers and send raw ZPL ---
+  let defaultPrinter = null, allPrinters = [];
+  function refreshPrinters(){
+    try{
+      BrowserPrint.getDefaultDevice("printer", (p)=>{ defaultPrinter=p; },
+        ()=>{ console.warn("No default printer."); });
+      BrowserPrint.getLocalDevices((printers)=>{
+        allPrinters = printers || [];
+        const sel = $("#printer"); sel.innerHTML="";
+        allPrinters.forEach((p,i)=>{
+          const opt = document.createElement("option");
+          opt.value = p.uid; opt.textContent = p.name || p.uid || ("Printer "+(i+1));
+          sel.appendChild(opt);
+        });
+      }, ()=>{}, "printer");
+    }catch(e){ console.warn("BrowserPrint not available"); }
+  }
+  refreshPrinters();
+
+  $("#btnPrint").onclick = async ()=>{
+    const picked = document.querySelector('input[name="upc"]:checked');
+    if (!picked) return ($("#status").textContent="Select a UPC to print.");
+    const upc = picked.value;
+    try {
+      const res = await fetch("/extensiv-labels/print/zpl", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ upc, copies: 1 })
+      });
+      const js = await res.json();
+      if (!js.ok) throw new Error("server refused");
+
+      // send raw ZPL to selected printer
+      const uid = $("#printer").value;
+      const printer = allPrinters.find(p=>p.uid===uid) || defaultPrinter;
+      if (!printer) throw new Error("No printer selected or available.");
+      printer.send(js.zpl, ()=> { $("#status").textContent = "Sent to printer."; },
+                           (e)=> { $("#status").textContent = "Printer error."; console.error(e); });
+    } catch(e) {
+      console.error(e);
+      $("#status").textContent = "Failed to print.";
+    }
+  };
+</script>
+</body>
+</html>

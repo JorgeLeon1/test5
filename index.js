@@ -23,7 +23,7 @@ import extensivRouter from "./app/routes/extensiv.js";
 import ordersRouter from "./app/routes/orders.js";
 import singleAllocApi from "./app/routes/singleAllocApi.js";
 import batchAllocApi from "./app/routes/batchAllocApi.js";
-
+import extensivLabels from "./routes/extensivLabels.js";
 /* --------------------------- App bootstrap --------------------------- */
 
 const app = express(); // ✅ create app first
@@ -45,7 +45,7 @@ app.use("/api/single-alloc", singleAllocApi);   // <- first
 app.use("/extensiv", extensivRouter);
 app.use("/alloc", allocRouter);
 app.use("/api/batch", batchAllocApi);
-
+app.use("/extensiv-labels", extensivLabels);
 /* ------------------ THEN STATIC + PAGE ROUTES ---------------- */
 app.use(express.static('public'));
 app.use("/", ordersRouter); // make sure this router does NOT have an "app.get('*')" catch-all

@@ -23,7 +23,7 @@ import extensivRouter from "./app/routes/extensiv.js";
 import ordersRouter from "./app/routes/orders.js";
 import singleAllocApi from "./app/routes/singleAllocApi.js";
 import batchAllocApi from "./app/routes/batchAllocApi.js";
-import extensivLabels from "./routes/extensivLabels.js";
+import extensivLabels from "./app/routes/extensivLabels.js";
 /* --------------------------- App bootstrap --------------------------- */
 
 const app = express(); // ✅ create app first

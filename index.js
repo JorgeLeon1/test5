@@ -23,67 +23,32 @@ import extensivRouter from "./app/routes/extensiv.js";
 import ordersRouter from "./app/routes/orders.js";
 import singleAllocApi from "./app/routes/singleAllocApi.js";
 import batchAllocApi from "./app/routes/batchAllocApi.js";
-import extensivLabels from "./app/routes/extensivLabels.js";
-/* --------------------------- App bootstrap --------------------------- */
+import extensivLabels from "./app/routes/extensivLabels.js"; // <-- ensure this file exists, exact case
 
-const app = express(); // ✅ create app first
+const app = express();
 
-app.use(express.json());
-app.use(cors());
-app.use(express.urlencoded({ extended: true }));
-
-// Sessions are fine, but don't guard the API with page auth middleware
-app.use(session({
-  secret: 'your_secret_key',
-  resave: false,
-  saveUninitialized: true,
-  cookie: { secure: false, maxAge: 30 * 60 * 10000 },
-}));
-
-/* ------------------ MOUNT API ROUTERS FIRST ------------------ */
-app.use("/api/single-alloc", singleAllocApi);   // <- first
-app.use("/extensiv", extensivRouter);
-app.use("/alloc", allocRouter);
-app.use("/api/batch", batchAllocApi);
-app.use("/extensiv-labels", extensivLabels);
-/* ------------------ THEN STATIC + PAGE ROUTES ---------------- */
-app.use(express.static('public'));
-app.use("/", ordersRouter); // make sure this router does NOT have an "app.get('*')" catch-all
-// core middleware
+/* --------------------------- Core middleware -------------------------- */
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
-// sessions (MemoryStore is fine for dev; swap in Redis for prod)
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "your_secret_key",
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: false, maxAge: 30 * 60 * 1000 }, // 30 mins
+    cookie: { secure: false, maxAge: 30 * 60 * 1000 }, // 30 minutes
   })
 );
 
-// paths
+/* ----------------------------- Paths/static --------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// static files
+// serve static assets
 app.use(express.static(path.join(__dirname, "public")));
 
-/* ------------------------------ Multer ------------------------------- */
-
-const uploadDir = path.join(__dirname, "Uploaded940s");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-});
-const upload = multer({ storage });
-
-/* ------------------------------- Auth -------------------------------- */
-
+/* -------------------------- Auth helpers ----------------------------- */
 const users = [
   { username: "YS", password: "testCus1" },
   { username: "nuvia", password: "admin1" },
@@ -99,8 +64,7 @@ function isAuthenticated(req, res, next) {
   res.redirect("/");
 }
 
-/* ------------------------------- Views ------------------------------- */
-
+/* ------------------------------ Views -------------------------------- */
 app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "login.html"));
 });
@@ -119,46 +83,68 @@ app.get("/logout", (req, res) => {
   req.session.destroy(() => res.redirect("/"));
 });
 
-// existing pages
-app.get("/landing", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "landing.html"))
-);
-app.get('/alloc-single', isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, 'public', 'alloc-single.html'))
-);
-app.get("/order", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "order.html"))
-);
-app.get("/seeDatabaseData", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "seeDatabaseData.html"))
-);
-app.get("/portal", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "portal.html"))
-);
-app.get("/help", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "helpPage.html"))
-);
-app.get("/getOrdersPage", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "seeOrderlines.html"))
-);
-app.get("/orderReport", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "seeOrderHeadersAndLines.html"))
-);
-app.get("/reports", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "reportsLanding.html"))
-);
-
-// ✅ new page for single-order allocation UI
-app.get("/alloc-single", isAuthenticated, (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "alloc-single.html"))
-);
-
+// Pages (pick ONE for /landing; here I serve KPI)
 app.get("/landing", isAuthenticated, (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "kpi.html"))
 );
 
+app.get("/portal", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "portal.html"))
+);
+
+app.get("/alloc-single", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "alloc-single.html"))
+);
+
+app.get("/order", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "order.html"))
+);
+
+app.get("/seeDatabaseData", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "seeDatabaseData.html"))
+);
+
+app.get("/getOrdersPage", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "seeOrderlines.html"))
+);
+
+app.get("/orderReport", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "seeOrderHeadersAndLines.html"))
+);
+
+app.get("/reports", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "reportsLanding.html"))
+);
+
+app.get("/help", isAuthenticated, (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "helpPage.html"))
+);
+
+/* ------------------------------ Uploads ------------------------------ */
+const uploadDir = path.join(__dirname, "Uploaded940s");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+});
+const upload = multer({ storage });
+
 /* ------------------------------- API --------------------------------- */
 
+// Single order allocation API
+app.use("/api/single-alloc", singleAllocApi);
+
+// Batch alloc API
+app.use("/api/batch", batchAllocApi);
+
+// Extensiv main router
+app.use("/extensiv", extensivRouter);
+
+// Extensiv labels router (PDF/labels)
+app.use("/extensiv-labels", extensivLabels);
+
+// Example DB API
 app.get("/googleSpreadsheetorders", isAuthenticated, async (_req, res) => {
   try {
     const results = await connectToDatabase(`
@@ -177,17 +163,14 @@ app.get("/googleSpreadsheetorders", isAuthenticated, async (_req, res) => {
   }
 });
 
-app.post("/submit-form", (req, res) => {
-  console.log("Form Data:", req.body);
-  res.send("Form submitted successfully");
-});
-
+// Upload
 app.post("/upload", upload.array("files", 3), (req, res) => {
   if (!req.files?.length) return res.status(400).json({ message: "No files uploaded" });
   const uploadedFiles = req.files.map((f) => f.filename);
   res.json({ message: "Files uploaded successfully", files: uploadedFiles });
 });
 
+// Email (move creds to env!)
 app.post("/send-message", async (req, res) => {
   const { message } = req.body || {};
   if (!message) return res.status(400).json({ message: "Message is required." });
@@ -195,13 +178,16 @@ app.post("/send-message", async (req, res) => {
   try {
     const transporter = nodemailer.createTransport({
       service: "gmail",
-      auth: { user: "westmarkportal@wilenconsulting.com", pass: "znlr wlej ikiy ladg" },
+      auth: {
+        user: process.env.MAIL_USER,
+        pass: process.env.MAIL_APP_PASSWORD,
+      },
     });
 
     await transporter.sendMail({
-      from: '"Westmark Portal Contact Form" <your.email@gmail.com>',
-      to: "support@wilenconsulting.com",
-      cc: "yael@wilenconsulting.com",
+      from: `"Westmark Portal Contact Form" <${process.env.MAIL_USER}>`,
+      to: process.env.MAIL_TO || "support@wilenconsulting.com",
+      cc: process.env.MAIL_CC || "yael@wilenconsulting.com",
       subject: "New Message from Wm Help Center",
       text: message,
     });
@@ -213,12 +199,7 @@ app.post("/send-message", async (req, res) => {
   }
 });
 
-app.get("/check-session", (req, res) => {
-  res.json({ loggedIn: !!req.session.user });
-});
-
-/* -------------------- Legacy allocation endpoint --------------------- */
-
+// Allocation legacy endpoint
 app.post("/allocateOrders", async (req, res) => {
   try {
     const lineIds = req.body?.lineIds || [];
@@ -226,14 +207,12 @@ app.post("/allocateOrders", async (req, res) => {
       return res.status(400).json({ message: "lineIds must be a non-empty array" });
     }
 
-    // Pull latest rows for those line IDs (adjust table/column to your schema)
     const orderLines = await connectToDatabase(
       `SELECT * FROM OrderItems WHERE id IN (${lineIds.map(Number).join(",")})`
     );
 
     const allocationResults = await allocateOrders(orderLines);
 
-    // Optional: forward to visualizer
     const allSkusAndLocations = allocationResults.allSkusAndLocations || [];
     const highlightLocations = {};
     (allSkusAndLocations || []).forEach((item) => {
@@ -266,28 +245,15 @@ app.post("/allocateOrders", async (req, res) => {
   }
 });
 
-/* ---------------------------- Router mounts -------------------------- */
-
-// Extensiv batch routes (import/push/allocate sql batch, etc.)
-app.use("/extensiv", extensivRouter);
-
-// SQL-script allocation routes for existing batch flow
-app.use("/alloc", allocRouter);
-
-// Single-order allocation API (used by /alloc-single page)
-// Endpoints like: GET /api/single/order/:id, POST /api/single/allocate, POST /api/single/push
-app.use("/api/single", singleAllocApi);
-
-// Place catch-all app routes last so they don’t shadow API mounts
+/* --------------------------- Router mount last ------------------------ */
+// Important: mount app/page router LAST so it doesn’t shadow APIs
 app.use("/", ordersRouter);
 
 /* --------------------------- Health & errors ------------------------- */
-
 app.get("/health", (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
-// JSON error handler
 app.use((err, _req, res, _next) => {
   console.error("API error:", err);
   const status = err.status || err.response?.status || 500;
@@ -303,7 +269,6 @@ process.on("uncaughtException", console.error);
 process.on("unhandledRejection", console.error);
 
 /* ------------------------------- Start ------------------------------- */
-
 const PORT = process.env.PORT || 3030;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server listening on", PORT);

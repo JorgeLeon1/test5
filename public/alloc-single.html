@@ -135,15 +135,6 @@
               <textarea id="batchIds" placeholder="e.g. 208136, 208140 208141&#10;208150"></textarea>
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <button id="btnLoadIds">Load by Order IDs</button>
-
-                <!-- NEW: push method selector -->
-                <label class="muted" for="pushMethod" style="margin-left:8px;">Push method</label>
-                <select id="pushMethod" title="Push method" style="max-width:140px;">
-                  <option value="auto" selected>Auto</option>
-                  <option value="put">PUT</option>
-                  <option value="post">POST</option>
-                </select>
-
                 <button id="btnBatchAlloc" disabled>Run SQL Allocation (batch)</button>
                 <button class="muted" id="btnBatchPush" disabled>Push Batch to Extensiv</button>
               </div>
@@ -338,11 +329,9 @@
       if (!confirm(`Push SuggAlloc for Order #${currentOrderId} to Extensiv?`)) return;
       try {
         setStatus(singleStatus, 'Pushing to Extensiv…');
-        // Use global method selector if present
-        const forceMethod = (document.getElementById('pushMethod')?.value || 'auto').toLowerCase();
         const data = await fetchJSON('/api/batch/push', {
           method:'POST',
-          body: JSON.stringify({ orderIds: [currentOrderId], forceMethod })
+          body: JSON.stringify({ orderIds: [currentOrderId] }) // no push method param
         });
         setStatus(singleStatus, `Push returned: ${data?.results?.[0]?.status ?? 'n/a'}`, data?.results?.[0]?.ok ? 'ok' : 'err');
       } catch (e) {
@@ -422,7 +411,6 @@
         if (!ids.length) {
           setStatus(batchStatusMsg, 'Enter at least one numeric Order ID.', 'err'); return;
         }
-        // You can reuse /api/batch/search if you’ve built a by-ids route. For now, assume you have it:
         const data = await fetchJSON('/api/batch/search-by-ids', {
           method:'POST', body: JSON.stringify({ orderIds: ids })
         });
@@ -522,11 +510,9 @@
 
       try {
         setStatus(batchStatusMsg, 'Pushing (batch)…');
-
-        const forceMethod = (document.getElementById('pushMethod')?.value || 'auto').toLowerCase();
         const data = await fetchJSON('/api/batch/push', {
           method:'POST',
-          body: JSON.stringify({ orderIds, forceMethod })
+          body: JSON.stringify({ orderIds }) // no push method param
         });
 
         if (Array.isArray(data.results)) {
@@ -534,7 +520,7 @@
             <tr>
               <td>${r.orderId}</td>
               <td>${r.sentAllocations}</td>
-              <td>${r.status}${r.triedFallback ? ` (fallback)` : ''}${r.forcedMethod ? ` [${r.forcedMethod}]` : ''}</td>
+              <td>${r.status}${r.triedFallback ? ` (fallback)` : ''}</td>
               <td>${r.ok ? '✅' : '⚠️'}</td>
               <td>${(r.responseSummary || '').replace(/</g,'&lt;')}</td>
             </tr>
